@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Login - Mini-SIEM{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-5">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">Administrator Login</div>
+                <div class="card-body">
+                    <!-- Login form handled by Flask-WTF -->
+                    <form method="POST">
+                        <!-- CSRF token, required to protect the form from Cross-Site Request Forgery -->
+                        {{ form.hidden_tag() }}
+
+                        <div class="mb-3">
+                            <label for="username" class="form-label">Username</label>
+                            {{ form.username(class="form-control", id="username", placeholder="Enter username") }}
+                            {% for error in form.username.errors %}
+                                <div class="text-danger small">{{ error }}</div>
+                            {% endfor %}
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="password" class="form-label">Password</label>
+                            {{ form.password(class="form-control", id="password", placeholder="Enter password") }}
+                            {% for error in form.password.errors %}
+                                <div class="text-danger small">{{ error }}</div>
+                            {% endfor %}
+                        </div>
+
+                        <div class="d-grid">
+                            {{ form.submit(class="btn btn-primary") }}
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
