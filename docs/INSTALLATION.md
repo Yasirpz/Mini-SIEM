@@ -114,7 +114,8 @@ python scripts/seed_sample_data.py --ban
 |---|---|
 | *(none)* | Seeds data, leaving `203.0.113.50` as `UNKNOWN` so you can demonstrate R-03 escalation manually. |
 | `--ban` | Also marks `203.0.113.50` as `BANNED`, so rule R-03 fires immediately. |
-| `--reset` | Deletes existing events and alerts before seeding. |
+| `--reset` | Deletes existing events and alerts before seeding. The Threat Intelligence registry is kept, since it holds your decisions rather than collected data. |
+| `--reset-registry` | Also clears the registry, for a genuinely clean starting state. Use this to reproduce the figures quoted in the reports. |
 
 Importing against two hosts is what makes rule R-04 (Multiple Host Attempt)
 fire, since one source IP is then seen attacking two machines.

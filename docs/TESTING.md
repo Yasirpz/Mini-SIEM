@@ -94,8 +94,12 @@ Additional behaviours verified:
 
 ## 5. Demonstration scenario
 
-Seeded with `python scripts/seed_sample_data.py --reset`, importing
+Seeded with `python scripts/seed_sample_data.py --reset-registry`, importing
 `samples/linux_auth_sample.log` against two hosts.
+
+`--reset-registry` rather than `--reset`: a plain reset keeps the Threat
+Intelligence registry, so an address left `BANNED` from an earlier run would
+make R-03 fire immediately and the "before" figures could not be observed.
 
 ### Observed result before banning the IP
 

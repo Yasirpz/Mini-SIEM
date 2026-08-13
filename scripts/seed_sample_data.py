@@ -11,8 +11,14 @@ a real machine.
 
 Usage:
     python scripts/seed_sample_data.py
-    python scripts/seed_sample_data.py --ban    # also mark the IP BANNED (R-03)
-    python scripts/seed_sample_data.py --reset  # clear events/alerts first
+    python scripts/seed_sample_data.py --ban              # mark the IP BANNED (R-03 fires)
+    python scripts/seed_sample_data.py --reset            # clear events/alerts first
+    python scripts/seed_sample_data.py --reset-registry   # also clear the IP registry
+
+Note: --reset keeps the Threat Intelligence registry, because it holds an
+administrator's decisions rather than collected data. If an address was
+previously marked BANNED, rule R-03 will therefore fire on the very first
+run. Use --reset-registry for a genuinely clean starting state.
 """
 import argparse
 import sys
@@ -90,12 +96,25 @@ def ensure_threat_ip(ban=False):
     return entry
 
 
-def reset_data():
-    """Remove stored events and alerts so the demo starts clean."""
+def reset_data(include_registry=False):
+    """
+    Remove stored events and alerts so the demo starts clean.
+
+    The Threat Intelligence registry is kept by default, since it represents
+    an administrator's accumulated decisions rather than collected data. Pass
+    include_registry=True to clear it too — needed to reproduce the
+    "before banning" figures quoted in the reports, because a registry entry
+    left at BANNED would make rule R-03 fire immediately.
+    """
     alerts = Alert.query.delete()
     events = Event.query.delete()
     db.session.commit()
     print(f"  Cleared {events} event(s) and {alerts} alert(s).")
+
+    if include_registry:
+        entries = IPRegistry.query.delete()
+        db.session.commit()
+        print(f"  Cleared {entries} Threat Intel registry entr(y/ies).")
 
 
 def load_sample(app):
@@ -113,13 +132,16 @@ def main():
                         help=f"mark {SUSPICIOUS_IP} as BANNED so rule R-03 fires")
     parser.add_argument('--reset', action='store_true',
                         help='delete existing events and alerts first')
+    parser.add_argument('--reset-registry', action='store_true',
+                        help='also clear the Threat Intel registry (implies --reset); '
+                             'use this to reproduce the "before banning" figures')
     args = parser.parse_args()
 
     app = create_app()
     with app.app_context():
-        if args.reset:
+        if args.reset or args.reset_registry:
             print('Resetting existing data...')
-            reset_data()
+            reset_data(include_registry=args.reset_registry)
 
         print('Creating monitored hosts...')
         hosts = ensure_hosts()
