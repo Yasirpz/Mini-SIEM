@@ -11,7 +11,7 @@ BS Computer Science
 | Group Leader | Yasir Parveez | 2K23/CSM/146 |
 | Group Member | Abdul Fatah | 2K23/CSM/03 |
 | Group Member | Mushahid Hussain | 2K23/CSM/100 |
-| Supervisor | Mr. Danish Nazir Arain | — |
+| Supervisor | Dr. Asadullah Burdi | — |
 
 ---
 
