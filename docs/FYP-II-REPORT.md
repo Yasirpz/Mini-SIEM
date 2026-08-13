@@ -635,11 +635,7 @@ Stated honestly, consistent with proposal §21.1.
 6. **Single-user model.** One administrator role; no per-user permissions,
    audit trail of administrator actions, or multi-tenancy.
 
-7. **CDN dependency.** Bootstrap and Chart.js load from a public CDN, so the
-   dashboard charts require internet access unless the files are vendored
-   locally.
-
-8. **Detection thresholds are static.** They do not adapt to a host's normal
+7. **Detection thresholds are static.** They do not adapt to a host's normal
    traffic level; an appropriate value must be chosen by the administrator.
 
 ---
@@ -650,7 +646,6 @@ Building on proposal §21.2, ordered by ratio of value to effort:
 
 | Enhancement | Rationale |
 |---|---|
-| Vendor front-end libraries locally | Removes the internet dependency; small effort, immediate reliability gain |
 | Scheduled automatic collection | Turns the system from on-demand into continuous monitoring |
 | PDF/Excel export of alert reports | Requested in the proposal; useful for incident records |
 | Email/SMS notification for `HIGH` alerts | Closes the loop from detection to response |

@@ -75,4 +75,3 @@ Things only the team can complete:
 - [ ] Build the slides from [PRESENTATION-OUTLINE.md](PRESENTATION-OUTLINE.md)
 - [ ] Build the poster from Part 3
 - [ ] Update the supervisor name in the proposal PDF (it still reads "Mr. Danish Nazir Arain")
-- [ ] Vendor Bootstrap and Chart.js locally if the viva venue has no internet

@@ -104,6 +104,10 @@ Python, Flask, Flask-Login, Flask-WTF, Flask-SQLAlchemy, SQLite, pandas +
 pyarrow (Parquet retention), paramiko (SSH), psutil (Windows telemetry),
 Bootstrap 5, Chart.js, vanilla JavaScript ES modules, pytest.
 
+Bootstrap and Chart.js are bundled in `app/static/vendor/` and served
+locally, so the application makes **no external network requests** and runs
+fully offline.
+
 ## Project Structure
 
 ```

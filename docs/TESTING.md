@@ -153,8 +153,6 @@ Consistent with Section 21 of the proposal:
   elevated shell; it is not a remote agent.
 - SQLite and synchronous collection suit a lab-scale demonstration, not an
   enterprise event volume.
-- Bootstrap and Chart.js load from a CDN, so the dashboard charts need
-  internet access unless those files are vendored locally.
 
 ---
 

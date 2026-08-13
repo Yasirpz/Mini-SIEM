@@ -478,7 +478,7 @@ By the end of FYP-I the foundation was working end to end.
 | Detection rules produce unusable volumes of alerts | High | High | Threshold-and-window design for R-01; de-duplication; `TRUSTED` suppression |
 | No access to a real Linux host for demonstration | Medium | High | Sample log import and a synthetic generator, so the demo needs no target machine |
 | Live log collection fails during the viva | Medium | High | Demonstration path built entirely on imported sample data |
-| Demonstration machine has no internet | Medium | Medium | Identified: Bootstrap and Chart.js load from a CDN; vendor them locally before the viva |
+| Demonstration machine has no internet | Medium | Medium | Identified in FYP-I: Bootstrap and Chart.js loaded from a CDN. Resolved in FYP-II by bundling both libraries in `app/static/vendor/` |
 | Team member unavailable near submission | Low | Medium | All members maintain working knowledge of the whole system; contributions tracked via Git |
 | Scope expanding beyond available time | Medium | Medium | Out-of-scope list agreed in the proposal and adhered to |
 | Accidental exposure of real data in screenshots | Low | High | Only synthetic data and reserved address ranges used throughout |

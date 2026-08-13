@@ -348,7 +348,7 @@ Run through this the day before.
 - [ ] `python -m pytest` → confirm 95 passed
 - [ ] `python scripts/seed_sample_data.py --reset-registry` → confirm 34 events / 13 alerts
 - [ ] Admin account exists and the password is known
-- [ ] **Vendor Bootstrap and Chart.js locally** if the venue has no internet — otherwise the charts will not render
+- [ ] Confirm the app runs with Wi-Fi switched off (Bootstrap and Chart.js are bundled locally, so it should)
 - [ ] Browser zoom set so text is readable on a projector
 - [ ] Dark mode toggle tested (looks good on a projector)
 - [ ] Screenshots captured as backup in case the live demo fails

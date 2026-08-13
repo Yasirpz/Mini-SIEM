@@ -154,11 +154,10 @@ and the `storage/` folder, then repeat from step 7.
 
 ## Notes
 
-- **Internet access.** Bootstrap 5 and Chart.js are loaded from a public CDN
-  in `app/templates/base.html`. If you will demonstrate on a machine with no
-  internet connection, download those two files into
-  `app/static/vendor/` beforehand and update the three `<link>`/`<script>`
-  tags to point at them.
+- **No internet required.** Bootstrap 5.3.2 and Chart.js 4.4.1 are bundled in
+  `app/static/vendor/` and served locally, so the interface and charts work
+  on a machine with no internet connection. The application makes no external
+  network requests at all.
 - **Live Linux collection** requires an authorized host reachable over SSH
   with a user permitted to run `journalctl`. Only ever point this at a
   machine you own or have written permission to monitor.
@@ -173,5 +172,5 @@ and the `storage/` folder, then repeat from step 7.
 | `flask: command not found` | The virtual environment is not active. Re-run the activate command from step 3. |
 | Login form returns "The CSRF token is missing" | `SECRET_KEY` is unset or changed between restarts. Set it in `.env`. |
 | Login succeeds but immediately redirects back | `SESSION_COOKIE_SECURE=true` while serving over plain HTTP. Set it to `false` for local use. |
-| Dashboard charts are blank | No events yet, or no internet for the Chart.js CDN. Import a sample log, and check the browser console. |
+| Dashboard charts are blank | No events yet. Import a sample log from the Events page, then reload. |
 | `No module named 'app'` when running a script | Run scripts from the project root, e.g. `python scripts/create_admin.py`. |
