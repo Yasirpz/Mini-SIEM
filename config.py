@@ -1,8 +1,11 @@
 import os
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
+
+BASE_DIR = Path(__file__).resolve().parent
 
 
 class Config:
@@ -16,9 +19,16 @@ class Config:
 
     # Database
     SQLALCHEMY_DATABASE_URI = os.getenv(
-        'SQLALCHEMY_DATABASE_URI', 'sqlite:///../instance/mini_siem.db'
+        'SQLALCHEMY_DATABASE_URI',
+        f"sqlite:///{BASE_DIR / 'instance' / 'mini_siem.db'}",
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+    # Session cookie hardening (NFR: Security)
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
+    # Enable only when the app is served over HTTPS, otherwise login breaks.
+    SESSION_COOKIE_SECURE = os.getenv('SESSION_COOKIE_SECURE', 'false').lower() == 'true'
 
     # SSH configuration (used for optional live Linux log collection)
     SSH_DEFAULT_HOST = os.getenv('SSH_DEFAULT_HOST', '127.0.0.1')
@@ -28,4 +38,28 @@ class Config:
     SSH_PWD = os.getenv('SSH_PASSWORD', '')
 
     # Folder used to store raw collected logs (Parquet) for forensic retention
-    STORAGE_FOLDER = Path.cwd() / 'storage'
+    STORAGE_FOLDER = BASE_DIR / 'storage'
+
+    # Folder holding the sample log files shipped with the project (D-05)
+    SAMPLES_FOLDER = BASE_DIR / 'samples'
+
+    # --- Detection rule thresholds (proposal Section 10.2) ---
+    # R-01: this many auth failures for the same user/IP inside the window.
+    DETECTION_FAILED_LOGIN_THRESHOLD = int(os.getenv('DETECTION_FAILED_LOGIN_THRESHOLD', 5))
+    DETECTION_FAILED_LOGIN_WINDOW_MINUTES = int(
+        os.getenv('DETECTION_FAILED_LOGIN_WINDOW_MINUTES', 10)
+    )
+    # R-04: this many distinct hosts attacked by one source IP.
+    DETECTION_MULTI_HOST_THRESHOLD = int(os.getenv('DETECTION_MULTI_HOST_THRESHOLD', 2))
+
+    # Cap on uploaded sample log files (2 MB is ample for demonstration data).
+    MAX_CONTENT_LENGTH = int(os.getenv('MAX_UPLOAD_BYTES', 2 * 1024 * 1024))
+
+
+class TestConfig(Config):
+    """Configuration used by the automated test suite."""
+
+    TESTING = True
+    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
+    WTF_CSRF_ENABLED = False
+    SECRET_KEY = 'test-secret-key'

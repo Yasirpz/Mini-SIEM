@@ -1,0 +1,30 @@
+# Sample Linux SSH authentication log (auth.log / journald style)
+# Synthetic data for Mini-SIEM demonstration - FYCP/2K26/109
+#
+# All source addresses are from RFC 5737 documentation ranges
+# (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24) or RFC 1918 private
+# ranges, so nothing here points at a real machine.
+#
+# Expected detections:
+#   R-01  203.0.113.50 fails 6 times against 'root' inside 5 minutes
+#   R-02  invalid users 'test', 'oracle' and 'postgres'
+#   R-03  fires if 203.0.113.50 is marked BANNED in the registry
+#   R-04  fires when this file is imported against a second host as well
+
+Aug 12 09:14:02 lab-server sshd[2841]: Failed password for root from 203.0.113.50 port 51422 ssh2
+Aug 12 09:14:19 lab-server sshd[2843]: Failed password for root from 203.0.113.50 port 51423 ssh2
+Aug 12 09:14:37 lab-server sshd[2845]: Failed password for root from 203.0.113.50 port 51424 ssh2
+Aug 12 09:15:01 lab-server sshd[2847]: Invalid user test from 203.0.113.50 port 51425
+Aug 12 09:15:02 lab-server sshd[2847]: Failed password for invalid user test from 203.0.113.50 port 51425 ssh2
+Aug 12 09:15:28 lab-server sshd[2849]: Failed password for root from 203.0.113.50 port 51426 ssh2
+Aug 12 09:15:44 lab-server sshd[2851]: Failed password for root from 203.0.113.50 port 51427 ssh2
+Aug 12 09:16:03 lab-server sshd[2853]: Failed password for root from 203.0.113.50 port 51428 ssh2
+Aug 12 09:16:31 lab-server sshd[2855]: Invalid user oracle from 203.0.113.50 port 51429
+Aug 12 09:16:58 lab-server sshd[2857]: Invalid user postgres from 198.51.100.23 port 44120
+Aug 12 09:17:22 lab-server sshd[2859]: Failed password for admin from 198.51.100.23 port 44121 ssh2
+Aug 12 09:18:40 lab-server sshd[2861]: Failed password for admin from 198.51.100.23 port 44122 ssh2
+Aug 12 09:21:15 lab-server sshd[2870]: Accepted password for labadmin from 192.168.1.20 port 51500 ssh2
+Aug 12 09:22:03 lab-server sudo:  labadmin : TTY=pts/0 ; PWD=/home/labadmin ; USER=root ; COMMAND=/usr/bin/journalctl -u ssh
+Aug 12 10:02:11 lab-server sshd[2905]: Failed password for backup from 192.0.2.77 port 39112 ssh2
+Aug 12 10:47:52 lab-server sshd[2960]: Failed password for backup from 192.0.2.77 port 39240 ssh2
+Aug 12 11:33:09 lab-server sshd[3011]: Failed password for backup from 192.0.2.77 port 39501 ssh2

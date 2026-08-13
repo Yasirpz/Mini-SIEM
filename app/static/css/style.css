@@ -1,22 +1,52 @@
-/* Hero section */
-.hero {
-    height: 20vh;
-    background: linear-gradient(120deg, #0d6efd, #6610f2);
+/*
+ * Mini-SIEM custom styling.
+ *
+ * Bootstrap 5.3 handles light/dark natively through the data-bs-theme
+ * attribute set by main.js, so this file only adds what Bootstrap does not
+ * already provide.
+ */
+
+/* Charts need a bounded height or Chart.js grows them without limit. */
+canvas {
+    max-height: 260px;
 }
 
-/* List links */
-#links a {
-    text-decoration: none;
-    color: #0d6efd;
-    font-weight: 500;
+/* Keep long log messages from stretching a table beyond the viewport. */
+.table td {
+    vertical-align: middle;
 }
 
-#links a:hover {
-    text-decoration: underline;
+.table .text-truncate {
+    display: inline-block;
+    max-width: 100%;
 }
 
-[data-bs-theme="dark"] .list-group-item {
-    background-color: #655959 !important; /* Grey, noticeably lighter than black */
-    border-color: #495057 !important;     /* Matching border */
-    color: #f8f9fa !important;            /* White text */
+/* Stat cards: a subtle lift so they read as a group above the charts. */
+#statCards .card {
+    transition: transform 0.15s ease-in-out;
+}
+
+#statCards .card:hover {
+    transform: translateY(-2px);
+}
+
+/* Monospace columns (IPs, rule IDs) sit better slightly smaller. */
+.font-monospace {
+    font-size: 0.9em;
+}
+
+/* Severity badges keep a consistent width so the column doesn't jitter. */
+.badge {
+    min-width: 4.5rem;
+}
+
+/* The import panel's tab body should look continuous with the tab strip. */
+.tab-content {
+    background-color: var(--bs-body-bg);
+}
+
+/* Scrollable admin lists get a faint edge so it's clear they scroll. */
+#hostsListAdmin,
+#ipListAdmin {
+    scrollbar-width: thin;
 }

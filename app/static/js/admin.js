@@ -1,17 +1,17 @@
-import { createEl, clearContainer } from './dom.js';
-import { fetchHosts, createHost, updateHost, removeHost } from './api.js';
-import { fetchIPs, createIP, updateIP, removeIP } from './api.js';
+/**
+ * Administration panel: host management and the Threat Intelligence registry.
+ */
+import { createEl, clearContainer, notify, formatTime } from './dom.js';
+import {
+    fetchHosts, createHost, updateHost, removeHost,
+    fetchIPs, createIP, updateIP, removeIP,
+} from './api.js';
 
-// --- HOSTS SECTION ---
 const hostsContainer = document.getElementById('hostsListAdmin');
 const hostForm = document.getElementById('hostForm');
-
-// --- IP REGISTRY SECTION ---
 const ipContainer = document.getElementById('ipListAdmin');
 const ipForm = document.getElementById('ipForm');
-const refreshIPsBtn = document.getElementById('refreshIPsBtn');
 
-// --- MODALS ---
 let hostModal = null;
 let ipModal = null;
 
@@ -22,69 +22,99 @@ export async function initAdmin() {
     const ipModalEl = document.getElementById('editIPModal');
     if (ipModalEl) ipModal = new bootstrap.Modal(ipModalEl);
 
-    // Host event listeners
     if (hostForm) hostForm.addEventListener('submit', handleAddHost);
-    if (document.getElementById('saveHostBtn')) {
-        document.getElementById('saveHostBtn').addEventListener('click', handleSaveHost);
-    }
-
-    // IP registry event listeners
     if (ipForm) ipForm.addEventListener('submit', handleAddIP);
-    if (refreshIPsBtn) refreshIPsBtn.addEventListener('click', refreshIPs);
-    if (document.getElementById('saveIPBtn')) {
-        document.getElementById('saveIPBtn').addEventListener('click', handleSaveIP);
-    }
 
-    if (ipContainer) await refreshIPs();
+    bindClick('saveHostBtn', handleSaveHost);
+    bindClick('saveIPBtn', handleSaveIP);
+    bindClick('refreshHostsBtn', refreshHosts);
+    bindClick('refreshIPsBtn', refreshIPs);
 
     if (hostsContainer) await refreshHosts();
+    if (ipContainer) await refreshIPs();
 }
 
-// ======================= HOST LOGIC =======================
+function bindClick(id, handler) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', handler);
+}
+
+// ======================= HOST MANAGEMENT =======================
 
 async function refreshHosts() {
     clearContainer(hostsContainer);
     try {
         const hosts = await fetchHosts();
+        if (hosts.length === 0) {
+            createEl('div', ['list-group-item', 'text-muted', 'small'],
+                'No hosts yet. Add the first one using the form.', hostsContainer);
+            return;
+        }
         hosts.forEach(renderHostRow);
-    } catch (e) { console.error(e); }
+    } catch (err) {
+        createEl('div', ['list-group-item', 'text-danger', 'small'],
+            `Error loading hosts: ${err.message}`, hostsContainer);
+    }
 }
 
 function renderHostRow(host) {
-    const item = createEl('div', ['list-group-item', 'd-flex', 'justify-content-between', 'align-items-center'], '', hostsContainer);
+    const item = createEl('div',
+        ['list-group-item', 'd-flex', 'justify-content-between', 'align-items-center'],
+        '', hostsContainer);
 
-    const info = createEl('div', [], '', item);
-    const icon = host.os_type === 'LINUX' ? '🐧' : '🪟';
-    createEl('span', ['me-2'], icon, info);
-    createEl('span', ['fw-bold', 'me-2'], host.hostname, info);
-    createEl('small', ['text-muted'], host.ip_address, info);
+    const info = createEl('div', ['overflow-hidden'], '', item);
+    const title = createEl('div', [], '', info);
+    createEl('span', ['me-2'], host.os_type === 'LINUX' ? '🐧' : '🪟', title);
+    createEl('span', ['fw-bold', 'me-2'], host.hostname, title);
+    createEl('small', ['text-muted', 'font-monospace'], host.ip_address, title);
 
-    const btnGroup = createEl('div', ['btn-group', 'btn-group-sm'], '', item);
+    if (host.description) {
+        createEl('small', ['d-block', 'text-muted', 'text-truncate'], host.description, info);
+    }
+    createEl('small', ['d-block', 'text-muted'],
+        `${host.event_count} events · ${host.alert_count} alerts`, info);
 
-    const editBtn = createEl('button', ['btn', 'btn-outline-secondary'], '✏️', btnGroup);
+    const btnGroup = createEl('div', ['btn-group', 'btn-group-sm', 'flex-shrink-0'], '', item);
+
+    const editBtn = createEl('button', ['btn', 'btn-outline-secondary'], 'Edit', btnGroup);
     editBtn.addEventListener('click', () => openHostModal(host));
 
-    const delBtn = createEl('button', ['btn', 'btn-outline-danger'], '🗑️', btnGroup);
+    const delBtn = createEl('button', ['btn', 'btn-outline-danger'], 'Delete', btnGroup);
     delBtn.addEventListener('click', async () => {
-        if (confirm(`Remove host ${host.hostname}?`)) {
+        if (!window.confirm(
+            `Remove host "${host.hostname}"? Its ${host.event_count} event(s) and ` +
+            `${host.alert_count} alert(s) are deleted too.`
+        )) {
+            return;
+        }
+        try {
             await removeHost(host.id);
+            notify(`Host "${host.hostname}" removed.`, 'info');
             await refreshHosts();
+        } catch (err) {
+            notify(err.message, 'danger');
         }
     });
 }
 
-async function handleAddHost(e) {
-    e.preventDefault();
+async function handleAddHost(event) {
+    event.preventDefault();
+
     const data = {
         hostname: document.getElementById('hostName').value,
         ip_address: document.getElementById('hostIP').value,
-        os_type: document.getElementById('hostOS').value
+        os_type: document.getElementById('hostOS').value,
+        description: document.getElementById('hostDesc').value,
     };
+
     try {
-        await createHost(data);
-        e.target.reset();
+        const host = await createHost(data);
+        notify(`Host "${host.hostname}" added.`, 'success');
+        event.target.reset();
         await refreshHosts();
-    } catch (err) { alert(err.message); }
+    } catch (err) {
+        notify(err.message, 'danger');
+    }
 }
 
 function openHostModal(host) {
@@ -92,6 +122,7 @@ function openHostModal(host) {
     document.getElementById('editHostName').value = host.hostname;
     document.getElementById('editHostIP').value = host.ip_address;
     document.getElementById('editHostOS').value = host.os_type;
+    document.getElementById('editHostDesc').value = host.description || '';
     hostModal.show();
 }
 
@@ -100,78 +131,114 @@ async function handleSaveHost() {
     const data = {
         hostname: document.getElementById('editHostName').value,
         ip_address: document.getElementById('editHostIP').value,
-        os_type: document.getElementById('editHostOS').value
+        os_type: document.getElementById('editHostOS').value,
+        description: document.getElementById('editHostDesc').value,
     };
+
     try {
         await updateHost(id, data);
         hostModal.hide();
+        notify('Host updated.', 'success');
         await refreshHosts();
-    } catch (err) { alert(err.message); }
+    } catch (err) {
+        notify(err.message, 'danger');
+    }
 }
 
-
-// ======================= IP REGISTRY LOGIC =======================
+// ======================= THREAT INTELLIGENCE REGISTRY =======================
 
 async function refreshIPs() {
     clearContainer(ipContainer);
     try {
-        const ips = await fetchIPs();
-        if (ips.length === 0) createEl('div', ['p-2', 'text-muted', 'small'], 'No entries yet.', ipContainer);
-        ips.forEach(renderIPRow);
-    } catch (e) { console.error("IP registry error:", e); }
+        const entries = await fetchIPs();
+        if (entries.length === 0) {
+            createEl('div', ['list-group-item', 'text-muted', 'small'],
+                'No entries yet. Addresses are also registered automatically ' +
+                'when the detection engine sees them.', ipContainer);
+            return;
+        }
+        entries.forEach(renderIPRow);
+    } catch (err) {
+        createEl('div', ['list-group-item', 'text-danger', 'small'],
+            `Error loading the registry: ${err.message}`, ipContainer);
+    }
 }
 
-function renderIPRow(ip) {
-    const item = createEl('div', ['list-group-item', 'd-flex', 'justify-content-between', 'align-items-center'], '', ipContainer);
+function renderIPRow(entry) {
+    const item = createEl('div',
+        ['list-group-item', 'd-flex', 'justify-content-between', 'align-items-center'],
+        '', ipContainer);
 
-    const info = createEl('div', [], '', item);
+    const info = createEl('div', ['overflow-hidden'], '', item);
+    const title = createEl('div', [], '', info);
+
     let color = 'bg-secondary';
-    if (ip.status === 'TRUSTED') color = 'bg-success';
-    if (ip.status === 'BANNED') color = 'bg-danger';
-    createEl('span', ['badge', color, 'me-2'], ip.status[0], info);
+    if (entry.status === 'TRUSTED') color = 'bg-success';
+    if (entry.status === 'BANNED') color = 'bg-danger';
+    createEl('span', ['badge', color, 'me-2'], entry.status, title);
+    createEl('span', ['fw-bold', 'font-monospace'], entry.ip_address, title);
 
-    createEl('span', ['fw-bold', 'font-monospace', 'me-2'], ip.ip_address, info);
-
-    let timeStr = '-';
-    if (ip.last_seen && ip.last_seen !== '-') {
-        const utcDate = new Date(ip.last_seen.replace(" ", "T") + "Z");
-        timeStr = utcDate.toLocaleString();
+    if (entry.hit_count > 0) {
+        createEl('span', ['badge', 'bg-light', 'text-dark', 'ms-2'],
+            `${entry.hit_count} hits`, title);
     }
-    createEl('small', ['text-muted'], timeStr, info);
 
-    const btnGroup = createEl('div', ['btn-group', 'btn-group-sm'], '', item);
+    if (entry.notes) {
+        createEl('small', ['d-block', 'text-muted', 'text-truncate'], entry.notes, info);
+    }
+    createEl('small', ['d-block', 'text-muted'],
+        `${entry.source || 'Manual entry'} · last seen ${formatTime(entry.last_seen)}`, info);
 
-    const editBtn = createEl('button', ['btn', 'btn-outline-secondary'], '✏️', btnGroup);
-    editBtn.addEventListener('click', () => openIPModal(ip));
+    const btnGroup = createEl('div', ['btn-group', 'btn-group-sm', 'flex-shrink-0'], '', item);
 
-    const delBtn = createEl('button', ['btn', 'btn-outline-danger'], '🗑️', btnGroup);
+    const editBtn = createEl('button', ['btn', 'btn-outline-secondary'], 'Edit', btnGroup);
+    editBtn.addEventListener('click', () => openIPModal(entry));
+
+    const delBtn = createEl('button', ['btn', 'btn-outline-danger'], 'Delete', btnGroup);
     delBtn.addEventListener('click', async () => {
-        if (confirm(`Remove IP address ${ip.ip_address} from the registry?`)) {
-            try {
-                await removeIP(ip.id);
-                await refreshIPs();
-            } catch (err) { alert("Error removing IP: " + err.message); }
+        if (!window.confirm(`Remove ${entry.ip_address} from the registry?`)) return;
+        try {
+            await removeIP(entry.id);
+            notify(`${entry.ip_address} removed from the registry.`, 'info');
+            await refreshIPs();
+        } catch (err) {
+            notify(err.message, 'danger');
         }
     });
 }
 
-async function handleAddIP(e) {
-    e.preventDefault();
+async function handleAddIP(event) {
+    event.preventDefault();
+
     const data = {
         ip_address: document.getElementById('regIP').value,
-        status: document.getElementById('regStatus').value
+        status: document.getElementById('regStatus').value,
+        source: document.getElementById('regSource').value,
+        notes: document.getElementById('regNotes').value,
     };
+
     try {
-        await createIP(data);
-        e.target.reset();
+        const entry = await createIP(data);
+        notify(
+            `${entry.ip_address} added as ${entry.status}.` +
+            (entry.status === 'BANNED'
+                ? ' Use "Re-run detection" on the Alerts page to apply rule R-03.'
+                : ''),
+            'success',
+        );
+        event.target.reset();
         await refreshIPs();
-    } catch (err) { alert(err.message); }
+    } catch (err) {
+        notify(err.message, 'danger');
+    }
 }
 
-function openIPModal(ip) {
-    document.getElementById('editIPId').value = ip.id;
-    document.getElementById('editIPVal').value = ip.ip_address;
-    document.getElementById('editIPStatus').value = ip.status;
+function openIPModal(entry) {
+    document.getElementById('editIPId').value = entry.id;
+    document.getElementById('editIPVal').value = entry.ip_address;
+    document.getElementById('editIPStatus').value = entry.status;
+    document.getElementById('editIPSource').value = entry.source || '';
+    document.getElementById('editIPNotes').value = entry.notes || '';
     ipModal.show();
 }
 
@@ -179,11 +246,23 @@ async function handleSaveIP() {
     const id = document.getElementById('editIPId').value;
     const data = {
         ip_address: document.getElementById('editIPVal').value,
-        status: document.getElementById('editIPStatus').value
+        status: document.getElementById('editIPStatus').value,
+        source: document.getElementById('editIPSource').value,
+        notes: document.getElementById('editIPNotes').value,
     };
+
     try {
-        await updateIP(id, data);
+        const entry = await updateIP(id, data);
         ipModal.hide();
+        notify(
+            `${entry.ip_address} updated to ${entry.status}.` +
+            (entry.status === 'BANNED'
+                ? ' Use "Re-run detection" on the Alerts page to apply rule R-03.'
+                : ''),
+            'success',
+        );
         await refreshIPs();
-    } catch (err) { alert(err.message); }
+    } catch (err) {
+        notify(err.message, 'danger');
+    }
 }

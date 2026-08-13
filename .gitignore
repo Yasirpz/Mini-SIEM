@@ -198,3 +198,7 @@ migrations/
 storage/
 *.parquet
 instance/
+
+# The bundled sample logs are project deliverables (D-05), so they must stay
+# tracked despite the blanket *.log rule above.
+!samples/*.log

@@ -5,44 +5,131 @@
 {% block content %}
 <section class="py-4">
   <div class="container">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h2>Monitoring Status</h2>
-        <button onclick="location.reload()" class="btn btn-sm btn-outline-secondary">Refresh view</button>
+
+    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+        <div>
+          <h2 class="mb-0">Security Dashboard</h2>
+          <small class="text-muted">Live monitoring status, detection summary and recent alerts.</small>
+        </div>
+        <button id="refreshDashboard" class="btn btn-sm btn-outline-secondary">Refresh</button>
     </div>
 
-    <!-- Populated by app/static/js/dashboard.js -->
-    <div id="hostsContainer" class="list-group">
-        <div class="text-center py-5 text-muted">
-            <div class="spinner-border text-primary mb-2" role="status"></div>
-            <p>Loading hosts...</p>
+    <!-- ================= SUMMARY STAT CARDS (FR-08) ================= -->
+    <div class="row g-3 mb-4" id="statCards">
+        <div class="col-6 col-lg-3">
+          <div class="card shadow-sm h-100 border-start border-4 border-primary">
+            <div class="card-body py-3">
+              <div class="text-muted text-uppercase small">Monitored Hosts</div>
+              <div class="fs-3 fw-bold" data-stat="hosts">–</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card shadow-sm h-100 border-start border-4 border-info">
+            <div class="card-body py-3">
+              <div class="text-muted text-uppercase small">Events Collected</div>
+              <div class="fs-3 fw-bold" data-stat="events">–</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card shadow-sm h-100 border-start border-4 border-warning">
+            <div class="card-body py-3">
+              <div class="text-muted text-uppercase small">Total Alerts</div>
+              <div class="fs-3 fw-bold" data-stat="alerts">–</div>
+              <div class="small text-muted"><span data-stat="unacknowledged">0</span> unreviewed</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card shadow-sm h-100 border-start border-4 border-danger">
+            <div class="card-body py-3">
+              <div class="text-muted text-uppercase small">High Severity</div>
+              <div class="fs-3 fw-bold text-danger" data-stat="high_alerts">–</div>
+              <div class="small text-muted"><span data-stat="banned_ips">0</span> banned IPs</div>
+            </div>
+          </div>
         </div>
     </div>
 
-    <h3 class="mb-3 mt-4 text-danger">Detected Threats (SIEM)</h3>
+    <!-- ================= CHARTS ================= -->
+    <div class="row g-3 mb-4">
+      <div class="col-lg-7">
+        <div class="card shadow-sm h-100">
+          <div class="card-header py-2"><h6 class="mb-0">Authentication Failures (last 7 days)</h6></div>
+          <div class="card-body">
+            <canvas id="timelineChart" height="120"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-5">
+        <div class="card shadow-sm h-100">
+          <div class="card-header py-2"><h6 class="mb-0">Alerts by Severity</h6></div>
+          <div class="card-body d-flex align-items-center justify-content-center">
+            <canvas id="severityChart" height="160"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+      <div class="col-lg-7">
+        <div class="card shadow-sm h-100">
+          <div class="card-header py-2"><h6 class="mb-0">Alerts by Detection Rule</h6></div>
+          <div class="card-body">
+            <canvas id="ruleChart" height="130"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-5">
+        <div class="card shadow-sm h-100">
+          <div class="card-header py-2"><h6 class="mb-0">Top Attacking Source IPs</h6></div>
+          <div class="card-body p-0">
+            <ul class="list-group list-group-flush" id="topSources">
+              <li class="list-group-item text-muted small">Loading…</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= HOST STATUS ================= -->
+    <h4 class="mb-3">Monitored Hosts</h4>
+    <div id="hostsContainer" class="list-group shadow-sm mb-4">
+        <div class="text-center py-5 text-muted">
+            <div class="spinner-border text-primary mb-2" role="status"></div>
+            <p class="mb-0">Loading hosts…</p>
+        </div>
+    </div>
+
+    <!-- ================= RECENT ALERTS ================= -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h4 class="mb-0 text-danger">Recent Alerts</h4>
+      <a href="{{ url_for('ui.alerts') }}" class="btn btn-sm btn-outline-danger">View all alerts</a>
+    </div>
     <div class="card shadow-sm">
       <div class="card-body p-0">
         <div class="table-responsive">
-          <table class="table table-striped table-hover mb-0" id="alertsTable">
+          <table class="table table-striped table-hover mb-0 align-middle">
               <thead class="table-light">
                   <tr>
                       <th>Time</th>
+                      <th>Rule</th>
                       <th>Host</th>
-                      <th>Alert Type</th>
+                      <th>Type</th>
                       <th>Source IP</th>
                       <th>Message</th>
                       <th>Severity</th>
                   </tr>
               </thead>
               <tbody id="alertsBody">
-                  <!-- Filled in by JS -->
-                  <tr>
-                      <td colspan="6" class="text-center py-3 text-muted">No alerts yet, or still loading.</td>
-                  </tr>
+                  <tr><td colspan="7" class="text-center py-3 text-muted">Loading…</td></tr>
               </tbody>
           </table>
         </div>
       </div>
     </div>
+
   </div>
 </section>
 {% endblock %}

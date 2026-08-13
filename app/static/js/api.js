@@ -1,99 +1,134 @@
 /**
- * Fetch API wrapper for talking to the Mini-SIEM Flask backend.
+ * Fetch wrapper for the Mini-SIEM JSON API.
+ *
+ * Every state-changing request carries the CSRF token that base.html puts in
+ * a <meta> tag, so the API stays protected by Flask-WTF rather than exempted
+ * from it.
  */
 
+function csrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute('content') : '';
+}
+
+/**
+ * Perform a request and unwrap the JSON body, turning an error status into a
+ * thrown Error carrying the server's message.
+ */
+async function request(url, options = {}) {
+    const opts = { headers: {}, ...options };
+
+    if (opts.method && opts.method !== 'GET') {
+        opts.headers['X-CSRFToken'] = csrfToken();
+    }
+    // Let the browser set the multipart boundary itself for FormData bodies.
+    if (opts.body && !(opts.body instanceof FormData)) {
+        opts.headers['Content-Type'] = 'application/json';
+    }
+
+    const res = await fetch(url, opts);
+
+    if (res.status === 401) {
+        throw new Error('Your session has expired. Please log in again.');
+    }
+
+    let payload = null;
+    try {
+        payload = await res.json();
+    } catch (err) {
+        payload = null;
+    }
+
+    if (!res.ok) {
+        throw new Error((payload && payload.error) || `Request failed (HTTP ${res.status})`);
+    }
+    return payload;
+}
+
+const jsonBody = (data) => JSON.stringify(data);
+
 // --- HOSTS ---
-export async function fetchHosts() {
-    const res = await fetch('/api/hosts');
-    return await res.json();
-}
-export async function createHost(data) {
-    const res = await fetch('/api/hosts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-    });
-    if (!res.ok) throw new Error((await res.json()).error);
-    return await res.json();
-}
-export async function updateHost(id, data) {
-    const res = await fetch(`/api/hosts/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-    });
-    if (!res.ok) throw new Error('Error updating host');
-    return await res.json();
-}
-export async function removeHost(id) {
-    await fetch(`/api/hosts/${id}`, { method: 'DELETE' });
-}
+export const fetchHosts = () => request('/api/hosts');
+export const createHost = (data) => request('/api/hosts', { method: 'POST', body: jsonBody(data) });
+export const updateHost = (id, data) => request(`/api/hosts/${id}`, { method: 'PUT', body: jsonBody(data) });
+export const removeHost = (id) => request(`/api/hosts/${id}`, { method: 'DELETE' });
 
 // --- LIVE MONITORING / LOG COLLECTION ---
-export async function checkHostStatus(id, osType) {
-    const endpoint = (osType === 'LINUX')
+export function checkHostStatus(id, osType) {
+    const endpoint = osType === 'LINUX'
         ? `/api/hosts/${id}/ssh-info`
         : `/api/hosts/${id}/windows-info`;
-
-    const res = await fetch(endpoint);
-    if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || `HTTP error ${res.status}`);
-    }
-    return await res.json();
+    return request(endpoint);
 }
 
-export async function triggerLogFetch(hostId) {
-    const res = await fetch(`/api/hosts/${hostId}/logs`, {
-        method: 'POST'
-    });
-    if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Error collecting logs');
-    }
-    return await res.json();
-}
+export const triggerLogFetch = (hostId) =>
+    request(`/api/hosts/${hostId}/logs`, { method: 'POST' });
 
 // --- THREAT INTELLIGENCE (IP REGISTRY) ---
-
-export async function fetchIPs() {
-    const res = await fetch('/api/ips');
-    if (!res.ok) throw new Error('Error fetching IP addresses');
-    return await res.json();
-}
-
-export async function createIP(data) {
-    const res = await fetch('/api/ips', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-    });
-    if (!res.ok) throw new Error((await res.json()).error || 'Error adding IP');
-    return await res.json();
-}
-
-export async function updateIP(id, data) {
-    const res = await fetch(`/api/ips/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-    });
-    if (!res.ok) throw new Error('Error updating IP status');
-    return await res.json();
-}
-
-export async function removeIP(id) {
-    const res = await fetch(`/api/ips/${id}`, {
-        method: 'DELETE'
-    });
-    if (!res.ok) throw new Error('Error removing IP');
-    return await res.json();
-}
+export const fetchIPs = () => request('/api/ips');
+export const createIP = (data) => request('/api/ips', { method: 'POST', body: jsonBody(data) });
+export const updateIP = (id, data) => request(`/api/ips/${id}`, { method: 'PUT', body: jsonBody(data) });
+export const removeIP = (id) => request(`/api/ips/${id}`, { method: 'DELETE' });
 
 // --- ALERTS ---
-
-export async function fetchAlerts() {
-    const res = await fetch('/api/alerts');
-    if (!res.ok) throw new Error('Error fetching alerts');
-    return await res.json();
+export function fetchAlerts(params = {}) {
+    const query = new URLSearchParams(
+        Object.entries(params).filter(([, value]) => value !== '' && value != null)
+    );
+    const suffix = query.toString() ? `?${query}` : '';
+    return request(`/api/alerts${suffix}`);
 }
+
+export const acknowledgeAlert = (id, acknowledged = true) =>
+    request(`/api/alerts/${id}/acknowledge`, { method: 'POST', body: jsonBody({ acknowledged }) });
+
+export const removeAlert = (id) => request(`/api/alerts/${id}`, { method: 'DELETE' });
+
+// --- EVENTS ---
+export function fetchEvents(params = {}) {
+    const query = new URLSearchParams(
+        Object.entries(params).filter(([, value]) => value !== '' && value != null)
+    );
+    const suffix = query.toString() ? `?${query}` : '';
+    return request(`/api/events${suffix}`);
+}
+
+export const fetchSamples = () => request('/api/events/samples');
+
+export const importBundledSample = (name, hostId) =>
+    request(`/api/events/samples/${encodeURIComponent(name)}`, {
+        method: 'POST',
+        body: jsonBody({ host_id: hostId }),
+    });
+
+export function uploadSample(file, hostId) {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('host_id', hostId);
+    return request('/api/events/import', { method: 'POST', body: form });
+}
+
+export const importPastedLog = (content, hostId) =>
+    request('/api/events/import', {
+        method: 'POST',
+        body: jsonBody({ host_id: hostId, content }),
+    });
+
+export const generateEvents = (hostId, sourceIp, attempts) =>
+    request('/api/events/import', {
+        method: 'POST',
+        body: jsonBody({ host_id: hostId, generate: true, source_ip: sourceIp, attempts }),
+    });
+
+export const clearEvents = (hostId) =>
+    request(`/api/events${hostId ? `?host_id=${hostId}` : ''}`, { method: 'DELETE' });
+
+export const runDetection = (hostId) =>
+    request('/api/detection/run', { method: 'POST', body: jsonBody({ host_id: hostId || null }) });
+
+// --- DASHBOARD STATISTICS ---
+export const fetchSummary = () => request('/api/stats/summary');
+export const fetchSeverityStats = () => request('/api/stats/severity');
+export const fetchRuleStats = () => request('/api/stats/rules');
+export const fetchTimeline = (days = 7) => request(`/api/stats/timeline?days=${days}`);
+export const fetchTopSources = (limit = 5) => request(`/api/stats/top-sources?limit=${limit}`);

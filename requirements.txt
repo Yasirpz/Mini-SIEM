@@ -1,13 +1,20 @@
+# --- Web framework and extensions ---
 Flask
 Flask-SQLAlchemy
 Flask-Migrate
-paramiko
-cryptography
-python-dotenv
-psutil
-pip-audit
-Flask-login
+Flask-Login
 Flask-WTF
 WTForms
+python-dotenv
+
+# --- Log storage and analysis ---
 pandas
 pyarrow
+
+# --- Optional live log collection ---
+paramiko          # SSH access to authorized Linux hosts
+cryptography      # required by paramiko
+psutil            # Windows host telemetry (RAM / CPU / disk / uptime)
+
+# --- Testing ---
+pytest

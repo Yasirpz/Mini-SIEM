@@ -3,60 +3,186 @@
 Mini-SIEM — FYCP/2K26/109
 IMCS, University of Sindh, Jamshoro
 
-## 1. Logging In
+This manual explains each screen of the Mini-SIEM web interface and the
+workflow an administrator follows. See
+[`INSTALLATION.md`](INSTALLATION.md) for setup.
 
-Navigate to `/login` and enter your administrator username and password.
-Incorrect credentials show a generic "login failed" message (the system
-never reveals whether the username or the password was wrong). Successful
-login redirects to the **Configuration** panel; all dashboard and admin
-pages are inaccessible until you are authenticated.
+---
 
-## 2. Dashboard (`/`)
+## 1. Logging in
 
-The dashboard is the main monitoring view:
+Open `http://127.0.0.1:5000`. Because every page is protected, you are sent
+to the login form.
 
-- **Monitoring Status** lists every registered host with its hostname, IP
-  address, and OS icon.
-  - **Status** — fetches live telemetry (free RAM, disk usage, CPU load,
-    uptime) from the host over SSH (Linux) or locally via `psutil`
-    (Windows).
-  - **Logs** — triggers log collection for that host: new authentication
-    events are fetched, archived to Parquet, and run through the detection
-    engine.
-- **Detected Threats (SIEM)** table shows the most recent alerts, with
-  timestamp, host, alert type, source IP, message, and severity
-  (`WARNING` or `CRITICAL`). Rows are color-coded by severity.
+Enter the username and password created with `scripts/create_admin.py`.
 
-Use **Refresh view** to reload the page.
+- A wrong username and a wrong password produce the same generic message,
+  *"Login failed. Check your username and password."* This is deliberate: a
+  specific message would confirm to an attacker that a username exists.
+- Tick **Keep me signed in** to persist the session across browser restarts.
+- **Logout** in the top-right ends the session immediately.
 
-## 3. Configuration Panel (`/config`)
+---
 
-### Add / Manage Hosts
-Enter a hostname, IP address, and OS type (Linux or Windows), then submit
-to register a new monitored host. Existing hosts can be edited or deleted
-from the list on the right.
+## 2. Dashboard
 
-### Threat Intelligence — IP Registry
-Add an IP address with a status:
-- `UNKNOWN` — not yet evaluated
-- `TRUSTED` — known-good, alerts for this IP are suppressed
-- `BANNED` — known-bad; any matching event is raised as a `CRITICAL` alert
+The landing page after login. It answers "what is the state of my
+environment right now?"
 
-Existing entries can be edited (e.g. promoted to `BANNED`) or removed.
+### Summary cards
 
-## 4. Logging Out
+| Card | Meaning |
+|---|---|
+| Monitored Hosts | Number of hosts configured for monitoring. |
+| Events Collected | Normalized security events stored in the database. |
+| Total Alerts | Alerts raised by the detection rules, and how many are still unreviewed. |
+| High Severity | `HIGH` alerts, and how many IPs are currently banned. |
 
-Click **Logout** in the navbar. This ends the session; the dashboard and
-configuration panel become inaccessible again until you log back in.
+### Charts
 
-## 5. Typical Demo Flow
+- **Authentication Failures (last 7 days)** — daily count of failed-login,
+  invalid-user and Windows logon-failure events. A spike identifies the day
+  an attack occurred.
+- **Alerts by Severity** — the `LOW` / `MEDIUM` / `HIGH` split.
+- **Alerts by Detection Rule** — which of R-01 … R-04 is firing.
+- **Top Attacking Source IPs** — the busiest sources, with their registry
+  status, so you can decide what to ban.
 
-1. Log in as administrator.
-2. Add a monitored host (e.g. `Lab-PC`, `127.0.0.1`, Linux).
-3. Add a suspicious test IP (e.g. `203.0.113.50`) with status `UNKNOWN`.
-4. Trigger log collection (or run `scripts/seed_sample_data.py` beforehand
-   for a fully offline demo).
-5. Review the generated alerts and their severity on the dashboard.
-6. Mark the test IP as `BANNED` and re-run detection to see the alert
-   severity escalate to `CRITICAL`.
-7. Log out and confirm the dashboard is no longer reachable.
+### Monitored Hosts
+
+Each host row offers two actions:
+
+- **Status** — polls the host for live RAM, disk, CPU and uptime. Linux hosts
+  are polled over SSH; Windows telemetry is read from the machine running
+  Mini-SIEM.
+- **Collect** — fetches new authentication logs from the host, archives them,
+  stores them as events and runs the detection rules. Collection is
+  incremental: only records newer than the previous run are fetched.
+
+### Recent Alerts
+
+The ten newest alerts, colour-coded by severity. **View all alerts** opens
+the full Alerts page.
+
+---
+
+## 3. Events page
+
+Where log data enters the system, and where the raw normalized records can be
+inspected.
+
+### Importing sample logs
+
+First choose a **Target host** — imported events are attributed to it. Then
+use one of the four tabs:
+
+| Tab | Use |
+|---|---|
+| **Bundled samples** | Import one of the sample files shipped in `samples/`. The quickest route to a working demonstration. |
+| **Upload a file** | Import your own Linux `auth.log`, Windows Security CSV export, or JSON. Format is detected automatically. |
+| **Paste log text** | Paste a few log lines directly — handy for showing the parser live. |
+| **Generate** | Produce a synthetic burst of failed logins from a chosen source IP, with no input file at all. |
+
+After an import, a result panel reports how many events were parsed, stored
+and skipped as duplicates, which Parquet file retains the raw copy, and how
+many alerts each rule raised.
+
+Re-importing the same file is safe: events are de-duplicated on host,
+timestamp, type, source IP and username, so nothing is double-counted.
+
+### Browsing events
+
+Filter by host, event type or source IP. Each row shows the timestamp, host,
+normalized event type, source IP, username, message and origin
+(`COLLECTED`, `IMPORTED` or `SYNTHETIC`).
+
+**Clear events** deletes stored events and their alerts so a demonstration
+can be repeated from a clean state. Archived Parquet files on disk are
+deliberately **not** deleted — that is the forensic retention guarantee.
+
+---
+
+## 4. Alerts page
+
+Full triage view of everything the detection engine has raised.
+
+### Filters
+
+Narrow by **severity**, **rule**, **host** and **review status**, then press
+**Apply**. Results are paginated 25 at a time.
+
+### Re-run detection
+
+Re-applies all four rules to events already in the database, without
+re-collecting anything. Use it after changing an IP's registry status. The
+engine is idempotent — existing alerts are never duplicated.
+
+### Acknowledging
+
+**Mark reviewed** records that an alert has been handled; the row dims. Use
+the **Unreviewed** filter to see only outstanding work.
+
+---
+
+## 5. Configuration page
+
+### Host Management
+
+Add a host with a hostname, IP address, OS type and optional description.
+IP addresses must be unique and valid, and are what identify a host.
+
+Each row shows its event and alert counts. **Delete** removes the host along
+with its events and alerts, and asks for confirmation first.
+
+### Threat Intelligence Registry
+
+Maintains the addresses the detection engine knows about.
+
+| Status | Effect |
+|---|---|
+| `UNKNOWN` | Default. Tracked, but no special treatment. |
+| `BANNED` | Any event from this address raises a `HIGH` alert (rule R-03). |
+| `TRUSTED` | Alerts from this address are suppressed entirely. |
+
+Addresses seen in failure events are registered automatically as `UNKNOWN`,
+with a running hit count — so the registry fills itself as you collect logs,
+and you only need to decide which entries to promote.
+
+Optional **Source** and **Notes** fields record where the intelligence came
+from and why the entry exists.
+
+> After changing a status, use **Re-run detection** on the Alerts page to
+> apply it to events already stored.
+
+---
+
+## 6. Recommended demonstration flow
+
+This is the sequence from Appendix B of the proposal.
+
+1. **Log in** as the administrator.
+2. **Configuration →** add a host, e.g. `Lab-PC` / `127.0.0.1` / Linux.
+   Add a second host to enable rule R-04.
+3. **Configuration →** add `203.0.113.50` to the registry as `UNKNOWN`.
+4. **Events →** select the host, and import `linux_auth_sample.log` from
+   **Bundled samples**. Repeat for the second host.
+5. Point out the result panel: R-01 fired once per burst, R-02 for each
+   invalid user, R-04 because one IP hit two hosts. R-03 is still zero.
+6. **Configuration →** edit `203.0.113.50` and set it to `BANNED`.
+7. **Alerts → Re-run detection.** R-03 now fires and severity escalates to
+   `HIGH`. This shows threat intelligence changing the outcome without
+   re-collecting a single log line.
+8. **Dashboard →** the cards and charts reflect the new totals.
+9. **Filter** the Alerts page to `HIGH` and acknowledge one alert.
+10. **Logout**, then try to open `/` — you are redirected to the login page,
+    demonstrating that protected pages are enforced.
+
+---
+
+## 7. Ethical use
+
+Mini-SIEM is a defensive monitoring tool for authorized environments only.
+Collect logs solely from machines you own or have written permission to
+monitor. Every address in the bundled samples is from a reserved
+documentation range (RFC 5737) or a private range (RFC 1918), so nothing in
+the demonstration data points at a real system.

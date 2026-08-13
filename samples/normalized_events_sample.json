@@ -1,0 +1,51 @@
+[
+  {
+    "timestamp": "2026-08-12 14:02:11",
+    "alert_type": "FAILED_LOGIN",
+    "source_ip": "203.0.113.50",
+    "user": "root",
+    "message": "Failed password for root from 203.0.113.50"
+  },
+  {
+    "timestamp": "2026-08-12 14:02:29",
+    "alert_type": "FAILED_LOGIN",
+    "source_ip": "203.0.113.50",
+    "user": "root",
+    "message": "Failed password for root from 203.0.113.50"
+  },
+  {
+    "timestamp": "2026-08-12 14:02:48",
+    "alert_type": "FAILED_LOGIN",
+    "source_ip": "203.0.113.50",
+    "user": "root",
+    "message": "Failed password for root from 203.0.113.50"
+  },
+  {
+    "timestamp": "2026-08-12 14:03:07",
+    "alert_type": "INVALID_USER",
+    "source_ip": "203.0.113.50",
+    "user": "jenkins",
+    "message": "Invalid user jenkins from 203.0.113.50"
+  },
+  {
+    "timestamp": "2026-08-12 14:03:25",
+    "alert_type": "FAILED_LOGIN",
+    "source_ip": "203.0.113.50",
+    "user": "root",
+    "message": "Failed password for root from 203.0.113.50"
+  },
+  {
+    "timestamp": "2026-08-12 14:03:44",
+    "alert_type": "FAILED_LOGIN",
+    "source_ip": "203.0.113.50",
+    "user": "root",
+    "message": "Failed password for root from 203.0.113.50"
+  },
+  {
+    "timestamp": "2026-08-12 14:05:02",
+    "alert_type": "SUCCESSFUL_LOGIN",
+    "source_ip": "192.168.1.20",
+    "user": "labadmin",
+    "message": "Accepted password for labadmin from 192.168.1.20"
+  }
+]
