@@ -21,6 +21,7 @@ from app.models import (
 from app.services.detection import DetectionEngine
 from app.services.log_analyzer import LogAnalyzer
 from app.services.log_collector import LogCollector
+from app.services.win_client import PowerShellError, WinClient
 
 
 def win_record(event_id, user='yasir', ip='-', logon_type='2',
@@ -34,6 +35,11 @@ def win_record(event_id, user='yasir', ip='-', logon_type='2',
         'LogonType': logon_type,
         'WorkstationName': workstation,
     }
+
+
+def ndjson(records):
+    """Render records the way the PowerShell query does: one JSON per line."""
+    return '\n'.join(json.dumps(record) for record in records)
 
 
 class FakeWinClient:
@@ -53,10 +59,19 @@ class FakeWinClient:
     def can_read_security_log(self):
         return self.readable
 
-    def run_ps(self, cmd):
+    def security_log_status(self):
+        return self.readable, 'READABLE' if self.readable else 'Access is denied'
+
+    @staticmethod
+    def is_elevated():
+        return True
+
+    def run_ps(self, cmd, timeout=120):
         self.last_command = cmd
         if self.payload is None:
             return ''
+        if isinstance(self.payload, list):
+            return ndjson(self.payload)
         return json.dumps(self.payload)
 
 
@@ -165,7 +180,8 @@ def test_query_filters_successful_logons_to_interactive_types(app):
     # Failures always pass; successes must match an interactive logon type.
     assert "'2','7','10','11'" in cmd.replace(' ', '')
     assert 'SYSTEM' in cmd
-    assert "-notlike '*$'" in cmd
+    # Machine accounts end in '$' and log on constantly.
+    assert "EndsWith('$')" in cmd
 
 
 def test_query_uses_a_start_time_for_incremental_collection(app):
@@ -178,6 +194,133 @@ def test_query_uses_a_start_time_for_incremental_collection(app):
 
 def test_query_without_last_fetch_has_no_start_time(app):
     assert 'StartTime' not in LogCollector.build_windows_query()
+
+
+def test_query_emits_one_json_object_per_record(app):
+    """
+    NDJSON avoids ConvertTo-Json's object-vs-array ambiguity, where a batch of
+    exactly one event would otherwise parse differently from every other batch.
+    """
+    cmd = LogCollector.build_windows_query()
+    assert 'ConvertTo-Json -Compress' in cmd
+    assert 'foreach ($rec in $records)' in cmd
+
+
+def test_query_treats_an_empty_match_as_success_not_failure(app):
+    """Get-WinEvent errors when nothing matches; that must not look like a fault."""
+    cmd = LogCollector.build_windows_query()
+    assert "notmatch 'No events were found'" in cmd
+    assert 'exit 0' in cmd
+
+
+def test_query_reports_real_errors_on_stderr(app):
+    cmd = LogCollector.build_windows_query()
+    assert '[Console]::Error.WriteLine' in cmd
+    assert 'exit 2' in cmd
+
+
+# ---------------------------------------------------------------------------
+# WinClient behaviour
+# ---------------------------------------------------------------------------
+
+def test_no_events_found_is_not_treated_as_an_error():
+    """An empty Security log must return empty output, not raise."""
+    class EmptyClient(WinClient):
+        def run_ps_raw(self, cmd, timeout=120):
+            return '', 'No events were found that match the specified criteria.', 1
+
+    assert EmptyClient().run_ps('anything') == ''
+
+
+def test_a_real_stderr_message_is_raised():
+    class DeniedClient(WinClient):
+        def run_ps_raw(self, cmd, timeout=120):
+            return '', 'Attempted to perform an unauthorized operation.', 1
+
+    with pytest.raises(PowerShellError, match='unauthorized'):
+        DeniedClient().run_ps('anything')
+
+
+def test_output_is_kept_even_when_the_exit_code_is_nonzero():
+    """
+    PowerShell exits non-zero for a pipeline that merely produced nothing.
+    Discarding stdout in that case would throw away real collected events.
+    """
+    class NoisyClient(WinClient):
+        def run_ps_raw(self, cmd, timeout=120):
+            return '{"EventId": 4625}', 'some warning', 1
+
+    assert NoisyClient().run_ps('anything') == '{"EventId": 4625}'
+
+
+def test_security_log_status_reports_readable():
+    class OkClient(WinClient):
+        def run_ps_raw(self, cmd, timeout=120):
+            return 'READABLE', '', 0
+
+    ok, detail = OkClient().security_log_status()
+    assert ok is True
+    assert 'READABLE' in detail
+
+
+def test_an_empty_security_log_still_counts_as_readable():
+    class EmptyLogClient(WinClient):
+        def run_ps_raw(self, cmd, timeout=120):
+            return 'EMPTY', '', 0
+
+    ok, _ = EmptyLogClient().security_log_status()
+    assert ok is True
+
+
+def test_security_log_status_surfaces_the_real_reason():
+    class DeniedClient(WinClient):
+        def run_ps_raw(self, cmd, timeout=120):
+            return 'ERROR: Attempted to perform an unauthorized operation.', '', 0
+
+    ok, detail = DeniedClient().security_log_status()
+    assert ok is False
+    assert 'unauthorized' in detail
+    assert 'ERROR:' not in detail  # prefix stripped for display
+
+
+# ---------------------------------------------------------------------------
+# The collection endpoint
+# ---------------------------------------------------------------------------
+
+def test_collection_endpoint_explains_why_the_log_is_unreadable(auth_client, app, monkeypatch):
+    """
+    A refused Security log must produce an actionable message naming the real
+    cause, not a bare instruction to run as Administrator.
+    """
+    host = Host(hostname='Yasir', ip_address='192.168.100.68', os_type='WINDOWS')
+    db.session.add(host)
+    db.session.commit()
+
+    from app.blueprints.api import hosts as hosts_api
+
+    class DeniedClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def security_log_status(self):
+            return False, 'Attempted to perform an unauthorized operation.'
+
+        @staticmethod
+        def is_elevated():
+            return False
+
+    monkeypatch.setattr(hosts_api, 'WinClient', DeniedClient)
+
+    response = auth_client.post(f'/api/hosts/{host.id}/logs')
+    payload = response.get_json()
+
+    assert response.status_code == 403
+    assert 'unauthorized' in payload['detail']
+    assert payload['server_is_elevated'] is False
+    assert 'Run as Administrator' in payload['hint']
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +337,7 @@ def test_collection_handles_a_list_of_records(app):
 
 
 def test_collection_handles_a_single_record(app):
-    """PowerShell emits a bare object rather than an array for one result."""
+    """A one-event batch must parse the same way as a many-event batch."""
     logs = LogCollector.get_windows_logs(FakeWinClient(win_record(4625)))
     assert len(logs) == 1
 
@@ -203,20 +346,43 @@ def test_collection_returns_empty_on_no_output(app):
     assert LogCollector.get_windows_logs(FakeWinClient(None)) == []
 
 
+def test_one_bad_line_does_not_discard_the_rest_of_the_batch(app):
+    """A single malformed record must not cost the operator the whole batch."""
+    payload = '\n'.join([
+        json.dumps(win_record(4625, user='alice')),
+        '{not json',
+        json.dumps(win_record(4624, user='bob')),
+    ])
+
+    logs = LogCollector.parse_windows_ndjson(payload)
+
+    assert [entry['user'] for entry in logs] == ['alice', 'bob']
+
+
 def test_collection_survives_invalid_json(app):
     class BadClient(FakeWinClient):
-        def run_ps(self, cmd):
+        def run_ps(self, cmd, timeout=120):
             return '{not json'
 
     assert LogCollector.get_windows_logs(BadClient(None)) == []
 
 
-def test_collection_survives_a_powershell_failure(app):
-    class ExplodingClient(FakeWinClient):
-        def run_ps(self, cmd):
-            raise OSError('powershell not found')
+def test_blank_lines_are_ignored(app):
+    payload = f'\n\n{json.dumps(win_record(4625))}\n\n'
+    assert len(LogCollector.parse_windows_ndjson(payload)) == 1
 
-    assert LogCollector.get_windows_logs(ExplodingClient(None)) == []
+
+def test_a_powershell_failure_is_raised_not_swallowed(app):
+    """
+    A genuine failure must reach the caller. Returning an empty list would be
+    reported to the operator as "no new logs", hiding the real problem.
+    """
+    class ExplodingClient(FakeWinClient):
+        def run_ps(self, cmd, timeout=120):
+            raise PowerShellError('Attempted to perform an unauthorized operation')
+
+    with pytest.raises(PowerShellError, match='unauthorized'):
+        LogCollector.get_windows_logs(ExplodingClient(None))
 
 
 def test_unrelated_records_are_dropped_from_the_batch(app):
@@ -370,8 +536,13 @@ def test_collect_endpoint_reports_missing_elevation(auth_client, app, monkeypatc
     )
 
     response = auth_client.post(f'/api/hosts/{host.id}/logs')
+    payload = response.get_json()
+
     assert response.status_code == 403
-    assert 'Administrator' in response.get_json()['error']
+    assert 'Cannot read the Windows Security log' in payload['error']
+    # The remedy lives in `hint`, the underlying cause in `detail`.
+    assert 'Run as Administrator' in payload['hint']
+    assert payload['detail']
 
 
 def test_collect_endpoint_stores_collected_events(auth_client, app, monkeypatch):

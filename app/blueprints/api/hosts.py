@@ -10,7 +10,7 @@ from app.models import Host, LogSource
 from app.services.log_analyzer import LogAnalyzer
 from app.services.log_collector import LogCollector
 from app.services.remote_client import RemoteClient
-from app.services.win_client import WinClient
+from app.services.win_client import WinClient, PowerShellError
 from app.validators import (
     MAX_DESCRIPTION_LENGTH,
     ValidationError,
@@ -203,19 +203,32 @@ def fetch_logs(host_id):
     elif host.os_type == 'WINDOWS':
         try:
             with WinClient() as win:
-                # A non-elevated process cannot read the Security log, and
-                # Get-WinEvent fails silently in that case. Checking first
-                # turns a confusing empty result into an actionable message.
-                if not win.can_read_security_log():
+                # A process without an elevated token cannot read the Security
+                # log, and Get-WinEvent reports that indistinguishably from an
+                # empty result. Probe first, and report what actually went
+                # wrong — including whether *this server process* is elevated,
+                # which is what matters rather than the terminal being used.
+                readable, detail = win.security_log_status()
+                if not readable:
                     return jsonify({
-                        'error': (
-                            'Cannot read the Windows Security log. Start Mini-SIEM '
-                            'from a PowerShell window opened with "Run as Administrator", '
-                            'and confirm that logon auditing is enabled.'
-                        )
+                        'error': 'Cannot read the Windows Security log.',
+                        'detail': detail,
+                        'server_is_elevated': win.is_elevated(),
+                        'hint': (
+                            'Stop Flask and restart it from a PowerShell window opened '
+                            'with "Run as Administrator". The Flask process itself must '
+                            'be elevated — an Administrator terminal does not help if the '
+                            'server was started elsewhere.'
+                        ),
                     }), 403
 
                 logs = LogCollector.get_windows_logs(win, last_fetch_time=log_source.last_fetch)
+        except PowerShellError as exc:
+            return jsonify({
+                'error': 'Windows log collection failed.',
+                'detail': str(exc),
+                'server_is_elevated': WinClient.is_elevated(),
+            }), 500
         except Exception as exc:
             return jsonify({'error': f"Windows collection error: {exc}"}), 500
 

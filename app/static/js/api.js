@@ -40,7 +40,15 @@ async function request(url, options = {}) {
     }
 
     if (!res.ok) {
-        throw new Error((payload && payload.error) || `Request failed (HTTP ${res.status})`);
+        // The server may add `detail` (what actually failed) and `hint` (what
+        // to do about it). Losing those leaves the user with a generic message
+        // and nothing to act on, so fold them into the thrown error.
+        const parts = [
+            (payload && payload.error) || `Request failed (HTTP ${res.status})`,
+            payload && payload.detail,
+            payload && payload.hint,
+        ].filter(Boolean);
+        throw new Error(parts.join(' — '));
     }
     return payload;
 }

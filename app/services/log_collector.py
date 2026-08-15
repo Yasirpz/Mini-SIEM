@@ -165,6 +165,16 @@ class LogCollector:
         successful logons are filtered down to genuine interactive sign-ins
         inside PowerShell — filtering there rather than in Python means the
         noise never crosses the process boundary.
+
+        Each record is emitted as its own single-line JSON object (NDJSON)
+        rather than one JSON document for the whole batch. `ConvertTo-Json`
+        renders a lone object as `{...}` but several as `[...]`, so a batch
+        that happens to contain exactly one event would otherwise parse
+        differently from every other batch. One object per line removes that
+        ambiguity entirely.
+
+        "No events were found" is caught and treated as an empty result, since
+        Get-WinEvent reports an empty match as an error.
         """
         max_events = max_events or _config('WINDOWS_MAX_EVENTS', WIN_DEFAULT_MAX_EVENTS)
         ids = f"{WIN_EVENT_FAILED_LOGON},{WIN_EVENT_SUCCESSFUL_LOGON}"
@@ -181,60 +191,90 @@ class LogCollector:
         ignored = ','.join(f"'{a}'" for a in WIN_IGNORED_ACCOUNTS)
 
         return (
-            f"Get-WinEvent -FilterHashtable {filter_script} -MaxEvents {max_events} "
-            "-ErrorAction SilentlyContinue | "
-            "ForEach-Object { "
-            "   $xml = [xml]$_.ToXml(); "
+            "$ErrorActionPreference='Stop'; "
+            "$records = @(); "
+            "try { "
+            f"  $records = @(Get-WinEvent -FilterHashtable {filter_script} "
+            f"    -MaxEvents {max_events} -ErrorAction Stop) "
+            "} catch { "
+            # An empty match is normal; anything else must reach the caller.
+            f"  if ($_.Exception.Message -notmatch 'No events were found') {{ "
+            "     [Console]::Error.WriteLine($_.Exception.Message); exit 2 "
+            "  } "
+            "} "
+            "foreach ($rec in $records) { "
+            "   $xml = [xml]$rec.ToXml(); "
             "   $data = @{}; "
-            "   $xml.Event.EventData.Data | ForEach-Object { $data[$_.Name] = $_.'#text' }; "
-            "   [PSCustomObject]@{ "
-            "       Timestamp = $_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'); "
-            "       EventId = $_.Id; "
-            "       TargetUserName = $data['TargetUserName']; "
-            "       IpAddress = $data['IpAddress']; "
-            "       LogonType = $data['LogonType']; "
-            "       WorkstationName = $data['WorkstationName']; "
+            "   foreach ($d in $xml.Event.EventData.Data) { $data[$d.Name] = $d.'#text' }; "
+            "   $logonType = [string]$data['LogonType']; "
+            "   $account = [string]$data['TargetUserName']; "
+            f"   $keep = $rec.Id -eq {WIN_EVENT_FAILED_LOGON}; "
+            "   if (-not $keep) { "
+            f"      $keep = ($logonType -in @({logon_types})) -and "
+            f"              ($account -notin @({ignored})) -and "
+            "              (-not $account.EndsWith('$')) "
             "   } "
-            "} | Where-Object { "
-            # Failures are always kept; successes only when a person signed in.
-            f"   $_.EventId -eq {WIN_EVENT_FAILED_LOGON} -or ("
-            f"      $_.LogonType -in @({logon_types}) -and "
-            f"      $_.TargetUserName -notin @({ignored}) -and "
-            "       $_.TargetUserName -notlike '*$' "
-            "   ) "
-            "} | ConvertTo-Json -Compress"
+            "   if ($keep) { "
+            "      [PSCustomObject]@{ "
+            "         Timestamp = $rec.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'); "
+            "         EventId = $rec.Id; "
+            "         TargetUserName = $account; "
+            "         IpAddress = [string]$data['IpAddress']; "
+            "         LogonType = $logonType; "
+            "         WorkstationName = [string]$data['WorkstationName']; "
+            "      } | ConvertTo-Json -Compress "
+            "   } "
+            "} "
+            "exit 0"
         )
 
     @staticmethod
     def get_windows_logs(win_client, last_fetch_time=None):
-        """Collect and normalize Windows Security logon events."""
+        """
+        Collect and normalize Windows Security logon events.
+
+        Raises PowerShellError (via the client) when the command genuinely
+        fails, so the API can report the real reason rather than silently
+        returning an empty list.
+        """
         ps_cmd = LogCollector.build_windows_query(last_fetch_time)
+        stdout = win_client.run_ps(ps_cmd)
 
-        try:
-            stdout = win_client.run_ps(ps_cmd)
-        except Exception as exc:
-            print(f"Error collecting Windows logs: {exc}")
-            return []
+        logs = LogCollector.parse_windows_ndjson(stdout)
+        print(f"DEBUG [Windows]: Collected {len(logs)} events.")
+        return logs
 
+    @staticmethod
+    def parse_windows_ndjson(stdout):
+        """
+        Parse newline-delimited JSON records into normalized events.
+
+        A malformed line is skipped rather than aborting the batch, so one bad
+        record cannot cost the operator every other event in the collection.
+        """
         if not stdout:
             return []
 
-        try:
-            data = json.loads(stdout)
-        except json.JSONDecodeError:
-            print('WinLog Error: invalid JSON output from PowerShell')
-            return []
-
-        # PowerShell emits a bare object for a single result, an array for many.
-        entries = [data] if isinstance(data, dict) else data
-
         logs = []
-        for entry in entries:
-            parsed = LogCollector.parse_windows_event(entry)
-            if parsed:
-                logs.append(parsed)
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
 
-        print(f"DEBUG [Windows]: Collected {len(logs)} events.")
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                print(f"WinLog: skipping unparseable record: {line[:120]}")
+                continue
+
+            # Tolerate a whole-batch array, in case ConvertTo-Json is ever
+            # called without -Compress and wraps the output differently.
+            candidates = entry if isinstance(entry, list) else [entry]
+            for candidate in candidates:
+                parsed = LogCollector.parse_windows_event(candidate)
+                if parsed:
+                    logs.append(parsed)
+
         return logs
 
     @staticmethod
