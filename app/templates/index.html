@@ -16,23 +16,41 @@
 
     <!-- ================= SUMMARY STAT CARDS (FR-08) ================= -->
     <div class="row g-3 mb-4" id="statCards">
-        <div class="col-6 col-lg-3">
+        <div class="col-6 col-lg">
           <div class="card shadow-sm h-100 border-start border-4 border-primary">
             <div class="card-body py-3">
               <div class="text-muted text-uppercase small">Monitored Hosts</div>
               <div class="fs-3 fw-bold" data-stat="hosts">–</div>
+              <div class="small text-muted">
+                <span class="text-success" data-stat="hosts_online">0</span> online ·
+                <span class="text-danger" data-stat="hosts_offline">0</span> offline
+              </div>
             </div>
           </div>
         </div>
-        <div class="col-6 col-lg-3">
+        <div class="col-6 col-lg">
           <div class="card shadow-sm h-100 border-start border-4 border-info">
             <div class="card-body py-3">
               <div class="text-muted text-uppercase small">Events Collected</div>
               <div class="fs-3 fw-bold" data-stat="events">–</div>
+              <div class="small text-muted"><span data-stat="events_24h">0</span> in last 24h</div>
             </div>
           </div>
         </div>
-        <div class="col-6 col-lg-3">
+        <div class="col-6 col-lg">
+          <div class="card shadow-sm h-100 border-start border-4 border-warning">
+            <div class="card-body py-3">
+              <div class="text-muted text-uppercase small">Authentication</div>
+              <div class="fs-3 fw-bold">
+                <span class="text-success" data-stat="successful_logins">–</span>
+                <span class="text-muted fs-5">/</span>
+                <span class="text-warning" data-stat="failed_logins">–</span>
+              </div>
+              <div class="small text-muted">successful / failed</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-lg">
           <div class="card shadow-sm h-100 border-start border-4 border-warning">
             <div class="card-body py-3">
               <div class="text-muted text-uppercase small">Total Alerts</div>
@@ -41,7 +59,7 @@
             </div>
           </div>
         </div>
-        <div class="col-6 col-lg-3">
+        <div class="col-6 col-lg">
           <div class="card shadow-sm h-100 border-start border-4 border-danger">
             <div class="card-body py-3">
               <div class="text-muted text-uppercase small">High Severity</div>
@@ -50,6 +68,30 @@
             </div>
           </div>
         </div>
+    </div>
+
+    <!-- ============= MONITORED HOST OVERVIEW ============= -->
+    <div class="card shadow-sm mb-4">
+      <div class="card-header py-2 d-flex justify-content-between align-items-center">
+        <h6 class="mb-0">Monitored Hosts</h6>
+        <a href="{{ url_for('ui.config') }}" class="btn btn-sm btn-outline-secondary">Manage</a>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0 align-middle">
+            <thead class="table-light">
+              <tr>
+                <th>Status</th><th>Host</th><th>OS</th>
+                <th>Collection</th><th class="text-end">Events</th>
+                <th class="text-end">Alerts</th><th>Last collected</th>
+              </tr>
+            </thead>
+            <tbody id="hostOverviewBody">
+              <tr><td colspan="7" class="text-center text-muted py-3">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <!-- ================= CHARTS ================= -->

@@ -60,10 +60,80 @@ Implemented in [`app/services/detection.py`](app/services/detection.py).
 | R-02 | Invalid User Rule | A login attempt for a user that does not exist. | `LOW` |
 | R-03 | Threat IP Match Rule | The event's source IP is marked `BANNED` in the registry. | `HIGH` |
 | R-04 | Multiple Host Attempt Rule | One source IP produces failures on ≥ 2 different monitored hosts. | `HIGH` |
+| R-05 | Audit Log Cleared | The Windows Security log was cleared (Event 1102). No threshold — one occurrence is the whole signal. | `HIGH` |
+| R-06 | Account Created / Deleted | A Windows account appeared or disappeared (4720 / 4726). | `MEDIUM` |
+| R-07 | Privilege Change | An account was added to a security group, or had its password reset by someone else (4732 / 4724). | `MEDIUM` |
+| R-08 | Account Lockout | Windows locked an account out after repeated failures (4740). | `MEDIUM` |
+
+R-01–R-04 detect attacks in progress. R-05–R-08 cover what an intruder does
+*after* getting in: escalating privilege, establishing persistence, and
+erasing the evidence.
+
+R-07 deliberately ignores ordinary administrative logons (4672) — they happen
+every time an admin signs in, and alerting on them would train the operator to
+ignore the rule. A lockout (R-08) does not feed R-01 either: it is the
+consequence of failures that rule has already counted.
 
 Thresholds are configurable in `.env` (see `.env.example`). Addresses marked
 `TRUSTED` are suppressed entirely. Re-running detection never duplicates an
 existing alert, so it is safe to run repeatedly during a demonstration.
+
+## What it does, in one paragraph
+
+Mini-SIEM acts as a centralised security monitoring platform. It collects
+authentication and security events from authorised Windows and Linux hosts,
+normalises the logs into a common event format, stores them, applies detection
+rules, generates alerts, and presents the results through a single dashboard.
+
+### Why each part exists
+
+| Question | Answer |
+|---|---|
+| **Why a SIEM?** | Logs hold the evidence of an attack, but nobody reads them. A SIEM does the reading. |
+| **Why centralised?** | An attacker probing five machines looks harmless on each one. Only a central view reveals the pattern. |
+| **Why normalise?** | A Linux `auth.log` line and a Windows Event 4625 describe the same thing in different shapes. Normalising once means the rules never care about the source, and a new log type costs one parser rather than a rewrite. |
+| **Why correlate?** | One failed login is noise. Five in ten minutes is an attack. Correlation is what separates them. |
+| **Why rules?** | Every alert can be traced to a specific rule and a specific event. That is explainable; a machine-learning score is not. |
+| **Why alerts?** | To rank what deserves attention, instead of presenting everything equally. |
+| **Why multiple hosts?** | Because rule R-04 — one IP attacking several machines — cannot exist otherwise. |
+| **Why source IP?** | It is what ties separate events to a single actor, and what the threat registry keys on. |
+| **Why event IDs?** | They are Windows' own stable vocabulary: 4625 is a failed logon on every Windows machine ever made. |
+
+## Multi-host monitoring
+
+One dashboard, three collection methods:
+
+```
+                     CENTRAL MINI-SIEM
+                            │
+     ┌──────────────────────┼──────────────────────┐
+     │                      │                      │
+LOCAL (this PC)        WINRM (LAN)            SSH (LAN)
+Windows Security    Windows Security      /var/log/auth.log
+log, read directly  log, read remotely    read over SSH
+     │                      │                      │
+     └──────────────────────┼──────────────────────┘
+                            ▼
+                 Normalised event format
+                            ▼
+               Parquet archive + Event table
+                            ▼
+              Detection engine (R-01 … R-08)
+                            ▼
+                     Alerts → Dashboard
+```
+
+Each host records its own health from real collection outcomes —
+`ONLINE`, `DEGRADED`, `OFFLINE` or `UNKNOWN`. A host that has never been
+contacted reports `UNKNOWN`, never `ONLINE`: existing in the database proves
+nothing about whether it can be reached.
+
+**Test Connection** checks each stage separately — reachable, authenticated,
+log accessible — because "connection failed" gives no clue whether the PC is
+off, the password is wrong, or the account lacks permission.
+
+See [`docs/REAL_WORLD_LAB_SETUP.md`](docs/REAL_WORLD_LAB_SETUP.md) for exact
+setup and demo-day steps.
 
 ## Architecture
 

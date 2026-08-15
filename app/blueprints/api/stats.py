@@ -3,6 +3,7 @@ Dashboard Module API: summary statistics and chart data (FR-08).
 
 Feeds the stat cards and the two Chart.js charts on the dashboard.
 """
+from collections import Counter
 from datetime import timedelta
 
 from flask import jsonify, request
@@ -16,7 +17,12 @@ from app.models import (
     Event,
     Host,
     IPRegistry,
+    EVT_SUCCESSFUL_LOGIN,
     FAILURE_EVENT_TYPES,
+    HOST_DEGRADED,
+    HOST_OFFLINE,
+    HOST_ONLINE,
+    HOST_UNKNOWN,
     IP_BANNED,
     SEVERITIES,
     SEVERITY_HIGH,
@@ -28,6 +34,10 @@ RULE_NAMES = {
     'R-02': 'Invalid User',
     'R-03': 'Threat IP Match',
     'R-04': 'Multiple Host Attempt',
+    'R-05': 'Audit Log Cleared',
+    'R-06': 'Account Created/Deleted',
+    'R-07': 'Privilege Change',
+    'R-08': 'Account Lockout',
 }
 
 
@@ -37,9 +47,25 @@ def stats_summary():
     """Headline counts for the dashboard stat cards."""
     day_ago = utcnow() - timedelta(hours=24)
 
+    hosts = Host.query.all()
+    by_status = Counter(host.health() for host in hosts)
+
     return jsonify({
-        'hosts': Host.query.count(),
+        'hosts': len(hosts),
+        # Health comes from real collection outcomes, so these counts reflect
+        # what the system has actually observed rather than what is configured.
+        'hosts_online': by_status.get(HOST_ONLINE, 0),
+        'hosts_degraded': by_status.get(HOST_DEGRADED, 0),
+        'hosts_offline': by_status.get(HOST_OFFLINE, 0),
+        'hosts_unknown': by_status.get(HOST_UNKNOWN, 0),
         'events': Event.query.count(),
+        'events_24h': Event.query.filter(Event.timestamp >= day_ago).count(),
+        'failed_logins': Event.query.filter(
+            Event.event_type.in_(FAILURE_EVENT_TYPES)
+        ).count(),
+        'successful_logins': Event.query.filter(
+            Event.event_type == EVT_SUCCESSFUL_LOGIN
+        ).count(),
         'alerts': Alert.query.count(),
         'high_alerts': Alert.query.filter_by(severity=SEVERITY_HIGH).count(),
         'unacknowledged': Alert.query.filter_by(acknowledged=False).count(),
@@ -47,6 +73,26 @@ def stats_summary():
         'threat_ips': IPRegistry.query.count(),
         'banned_ips': IPRegistry.query.filter_by(status=IP_BANNED).count(),
     })
+
+
+@api_bp.route('/stats/hosts', methods=['GET'])
+@login_required
+def stats_hosts():
+    """Per-host event and alert counts, for the events-by-host chart."""
+    hosts = Host.query.order_by(Host.hostname.asc()).all()
+    return jsonify([
+        {
+            'hostname': host.hostname,
+            'status': host.health(),
+            'os_type': host.os_type,
+            'collection_method': host.effective_collection_method(),
+            'events': host.events.count(),
+            'alerts': host.alerts.count(),
+            'last_success': host.last_success.strftime('%Y-%m-%d %H:%M:%S')
+            if host.last_success else None,
+        }
+        for host in hosts
+    ])
 
 
 @api_bp.route('/stats/severity', methods=['GET'])

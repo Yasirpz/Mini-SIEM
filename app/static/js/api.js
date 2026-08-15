@@ -139,6 +139,7 @@ export const runDetection = (hostId) =>
 
 // --- DASHBOARD STATISTICS ---
 export const fetchSummary = () => request('/api/stats/summary');
+export const fetchHostStats = () => request('/api/stats/hosts');
 export const fetchSeverityStats = () => request('/api/stats/severity');
 export const fetchRuleStats = () => request('/api/stats/rules');
 export const fetchTimeline = (days = 7) => request(`/api/stats/timeline?days=${days}`);

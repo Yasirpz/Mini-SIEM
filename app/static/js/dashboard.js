@@ -8,11 +8,13 @@ import {
 import {
     fetchHosts, checkHostStatus, triggerLogFetch, fetchAlerts,
     fetchSummary, fetchSeverityStats, fetchRuleStats, fetchTimeline, fetchTopSources,
+    fetchHostStats,
 } from './api.js';
 
 const hostsContainer = document.getElementById('hostsContainer');
 const alertsBody = document.getElementById('alertsBody');
 const topSources = document.getElementById('topSources');
+const hostOverviewBody = document.getElementById('hostOverviewBody');
 
 // Chart instances are kept so a refresh updates them instead of stacking
 // a new canvas overlay on top of the old one.
@@ -41,9 +43,52 @@ async function loadAll() {
         refreshStats(),
         refreshCharts(),
         refreshTopSources(),
+        refreshHostOverview(),
         refreshHostsList(),
         refreshAlertsTable(),
     ]);
+}
+
+// ======================= HOST OVERVIEW =======================
+
+/** Per-host status, so it is obvious which machines are actually reporting. */
+async function refreshHostOverview() {
+    if (!hostOverviewBody) return;
+    clearContainer(hostOverviewBody);
+
+    const statusStyles = {
+        ONLINE: ['bg-success', '🟢 online'],
+        DEGRADED: ['bg-warning text-dark', '🟡 degraded'],
+        OFFLINE: ['bg-danger', '🔴 offline'],
+        UNKNOWN: ['bg-secondary', '⚪ unknown'],
+    };
+
+    try {
+        const hosts = await fetchHostStats();
+
+        if (hosts.length === 0) {
+            emptyRow(hostOverviewBody, 7, 'No hosts configured yet.');
+            return;
+        }
+
+        hosts.forEach((host) => {
+            const row = createEl('tr', [], '', hostOverviewBody);
+            const [cls, label] = statusStyles[host.status] || statusStyles.UNKNOWN;
+
+            const statusCell = createEl('td', [], '', row);
+            createEl('span', ['badge', ...cls.split(' ')], label, statusCell);
+
+            createEl('td', ['fw-semibold'], host.hostname, row);
+            createEl('td', ['small'], host.os_type || '-', row);
+            createEl('td', ['small', 'text-muted'], host.collection_method, row);
+            createEl('td', ['text-end'], String(host.events), row);
+            createEl('td', ['text-end'], String(host.alerts), row);
+            createEl('td', ['small', 'text-muted'],
+                host.last_success ? formatTime(host.last_success) : 'never', row);
+        });
+    } catch (err) {
+        emptyRow(hostOverviewBody, 7, 'Could not load host status.');
+    }
 }
 
 // ======================= SUMMARY STAT CARDS =======================

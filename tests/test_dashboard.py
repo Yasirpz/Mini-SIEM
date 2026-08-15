@@ -44,14 +44,16 @@ def test_severity_breakdown_covers_every_level(auth_client, host, banned_ip):
     assert sum(data['counts']) > 0
 
 
-def test_rule_breakdown_lists_all_four_rules(auth_client, host):
+def test_rule_breakdown_lists_every_rule(auth_client, host):
     seed(host.id)
 
     data = auth_client.get('/api/stats/rules').get_json()
 
-    assert len(data['labels']) == 4
+    # R-01..R-04 detect attacks; R-05..R-08 cover post-compromise activity.
+    assert len(data['labels']) == 8
     assert data['labels'][0].startswith('R-01')
-    assert data['labels'][3].startswith('R-04')
+    assert data['labels'][7].startswith('R-08')
+    assert len(data['counts']) == len(data['labels'])
 
 
 def test_timeline_returns_one_point_per_day(auth_client, host):
