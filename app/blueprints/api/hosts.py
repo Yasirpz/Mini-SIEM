@@ -1,4 +1,6 @@
 """Host Management Module API: CRUD, live telemetry and log collection."""
+import os
+import re
 from datetime import datetime
 
 from flask import current_app, jsonify, request
@@ -6,14 +8,15 @@ from flask_login import login_required
 
 from app.blueprints.api import api_bp
 from app.extensions import db
-from app.models import Host, LogSource
+from app.models import COLLECT_LOCAL, COLLECT_SSH, COLLECT_WINRM, Host, LogSource
 from app.services.log_analyzer import LogAnalyzer
 from app.services.log_collector import LogCollector
 from app.services.remote_client import RemoteClient
-from app.services.win_client import WinClient, PowerShellError
+from app.services.win_client import PowerShellError, RemoteWinClient, WinClient
 from app.validators import (
     MAX_DESCRIPTION_LENGTH,
     ValidationError,
+    validate_collection_method,
     validate_hostname,
     validate_ip,
     validate_os_type,
@@ -50,6 +53,8 @@ def add_host():
         ip_address=ip_address,
         os_type=os_type,
         description=description,
+        collection_method=validate_collection_method(data.get('collection_method'), os_type),
+        remote_user=validate_text(data.get('remote_user'), 'remote user', 100),
     )
     db.session.add(host)
     db.session.commit()
@@ -81,6 +86,14 @@ def update_host(host_id):
         host.description = validate_text(
             data['description'], 'description', MAX_DESCRIPTION_LENGTH
         )
+
+    if 'collection_method' in data:
+        host.collection_method = validate_collection_method(
+            data['collection_method'], host.os_type
+        )
+
+    if 'remote_user' in data:
+        host.remote_user = validate_text(data['remote_user'], 'remote user', 100)
 
     db.session.commit()
     return jsonify(host.to_dict()), 200
@@ -193,14 +206,45 @@ def fetch_logs(host_id):
         db.session.add(log_source)
         db.session.commit()
 
-    if host.os_type == 'LINUX':
+    method = host.effective_collection_method()
+
+    if method == COLLECT_SSH:
         try:
             with _ssh_for(host) as remote:
                 logs = LogCollector.get_linux_logs(remote, last_fetch_time=log_source.last_fetch)
         except Exception as exc:
             return jsonify({'error': f"SSH error: {exc}"}), 502
 
-    elif host.os_type == 'WINDOWS':
+    elif method == COLLECT_WINRM:
+        try:
+            win = _winrm_for(host)
+        except PowerShellError as exc:
+            return jsonify({
+                'error': 'Remote collection is not configured for this host.',
+                'detail': str(exc),
+            }), 400
+
+        readable, detail = win.security_log_status()
+        if not readable:
+            return jsonify({
+                'error': f"Cannot read the Security log on {host.ip_address}.",
+                'detail': detail,
+                'hint': (
+                    'On the target PC, run "Enable-PSRemoting -Force" from an '
+                    'Administrator PowerShell, and make sure the account you '
+                    'configured is a local Administrator there.'
+                ),
+            }), 502
+
+        try:
+            logs = LogCollector.get_windows_logs(win, last_fetch_time=log_source.last_fetch)
+        except PowerShellError as exc:
+            return jsonify({
+                'error': f"Remote collection from {host.ip_address} failed.",
+                'detail': str(exc),
+            }), 502
+
+    elif method == COLLECT_LOCAL:
         try:
             with WinClient() as win:
                 # A process without an elevated token cannot read the Security
@@ -264,8 +308,33 @@ def _ssh_for(host):
     """Build a RemoteClient for a host using the configured SSH credentials."""
     return RemoteClient(
         host=host.ip_address,
-        user=current_app.config.get('SSH_DEFAULT_USER', 'siem-admin'),
+        user=host.remote_user or current_app.config.get('SSH_DEFAULT_USER', 'siem-admin'),
         port=current_app.config.get('SSH_DEFAULT_PORT', 2222),
         password=current_app.config.get('SSH_PWD'),
         key_file=current_app.config.get('SSH_KEY_FILE') or None,
+    )
+
+
+def _winrm_for(host):
+    """
+    Build a RemoteWinClient for a host.
+
+    The username may be stored per host, but the password is only ever read
+    from the environment. A per-host password can be supplied as
+    MINISIEM_WINRM_PASSWORD_<HOSTNAME>; otherwise the shared
+    MINISIEM_WINRM_PASSWORD is used.
+    """
+    suffix = re.sub(r'[^A-Z0-9]', '_', (host.hostname or '').upper())
+    password = (
+        os.getenv(f'MINISIEM_WINRM_PASSWORD_{suffix}')
+        or current_app.config.get('WINRM_PASSWORD')
+    )
+
+    return RemoteWinClient(
+        computer=host.ip_address,
+        username=host.remote_user or current_app.config.get('WINRM_DEFAULT_USER'),
+        password=password,
+        port=current_app.config.get('WINRM_PORT'),
+        use_ssl=current_app.config.get('WINRM_USE_SSL', False),
+        authentication=current_app.config.get('WINRM_AUTH', 'Default'),
     )

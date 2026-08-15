@@ -66,7 +66,17 @@ function renderHostRow(host) {
     const title = createEl('div', [], '', info);
     createEl('span', ['me-2'], host.os_type === 'LINUX' ? '🐧' : '🪟', title);
     createEl('span', ['fw-bold', 'me-2'], host.hostname, title);
-    createEl('small', ['text-muted', 'font-monospace'], host.ip_address, title);
+    createEl('small', ['text-muted', 'font-monospace', 'me-2'], host.ip_address, title);
+
+    // Make it obvious whether a host is read locally or over the network.
+    const methodLabels = {
+        LOCAL: 'local',
+        WINRM: 'remote · WinRM',
+        SSH: 'remote · SSH',
+    };
+    const badgeClass = host.collection_method === 'LOCAL' ? 'bg-secondary' : 'bg-info';
+    createEl('span', ['badge', badgeClass],
+        methodLabels[host.collection_method] || host.collection_method, title);
 
     if (host.description) {
         createEl('small', ['d-block', 'text-muted', 'text-truncate'], host.description, info);
@@ -77,9 +87,11 @@ function renderHostRow(host) {
     const btnGroup = createEl('div', ['btn-group', 'btn-group-sm', 'flex-shrink-0'], '', item);
 
     const collectBtn = createEl('button', ['btn', 'btn-primary'], 'Collect Logs', btnGroup);
-    collectBtn.title = host.os_type === 'WINDOWS'
-        ? 'Read this machine\'s Windows Security log (Event 4625/4624) and run the detection rules'
-        : 'Collect authentication logs over SSH and run the detection rules';
+    collectBtn.title = {
+        LOCAL: "Read this PC's own Windows Security log and run the detection rules",
+        WINRM: `Read the Security log on ${host.ip_address} over WinRM and run the detection rules`,
+        SSH: `Collect authentication logs from ${host.ip_address} over SSH and run the detection rules`,
+    }[host.collection_method] || 'Collect logs and run the detection rules';
     collectBtn.addEventListener('click', () => handleCollectLogs(host, collectBtn));
 
     const editBtn = createEl('button', ['btn', 'btn-outline-secondary'], 'Edit', btnGroup);
@@ -155,6 +167,8 @@ async function handleAddHost(event) {
         hostname: document.getElementById('hostName').value,
         ip_address: document.getElementById('hostIP').value,
         os_type: document.getElementById('hostOS').value,
+        collection_method: document.getElementById('hostMethod').value,
+        remote_user: document.getElementById('hostRemoteUser').value,
         description: document.getElementById('hostDesc').value,
     };
 
@@ -173,6 +187,8 @@ function openHostModal(host) {
     document.getElementById('editHostName').value = host.hostname;
     document.getElementById('editHostIP').value = host.ip_address;
     document.getElementById('editHostOS').value = host.os_type;
+    document.getElementById('editHostMethod').value = host.collection_method || '';
+    document.getElementById('editHostRemoteUser').value = host.remote_user || '';
     document.getElementById('editHostDesc').value = host.description || '';
     hostModal.show();
 }
@@ -183,6 +199,8 @@ async function handleSaveHost() {
         hostname: document.getElementById('editHostName').value,
         ip_address: document.getElementById('editHostIP').value,
         os_type: document.getElementById('editHostOS').value,
+        collection_method: document.getElementById('editHostMethod').value,
+        remote_user: document.getElementById('editHostRemoteUser').value,
         description: document.getElementById('editHostDesc').value,
     };
 

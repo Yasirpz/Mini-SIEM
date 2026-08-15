@@ -7,7 +7,13 @@ directly, so every value that reaches the database is validated here as well.
 import ipaddress
 import re
 
-from app.models import IP_STATUSES
+from app.models import (
+    COLLECT_LOCAL,
+    COLLECT_SSH,
+    COLLECT_WINRM,
+    COLLECTION_METHODS,
+    IP_STATUSES,
+)
 
 HOSTNAME_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9 ._-]{0,99}$')
 
@@ -60,6 +66,36 @@ def validate_ip_status(value):
     if status not in IP_STATUSES:
         raise ValidationError(f"status must be one of {', '.join(IP_STATUSES)}")
     return status
+
+
+def validate_collection_method(value, os_type=None):
+    """
+    Return a normalized collection method, or raise ValidationError.
+
+    Rejects combinations that cannot work — SSH against Windows, or WinRM
+    against Linux — so the error appears when the host is saved rather than
+    as a puzzling failure at collection time.
+    """
+    if value is None or not str(value).strip():
+        return None
+
+    method = str(value).strip().upper()
+    if method not in COLLECTION_METHODS:
+        raise ValidationError(
+            f"collection_method must be one of {', '.join(COLLECTION_METHODS)}"
+        )
+
+    if os_type == 'LINUX' and method in (COLLECT_WINRM, COLLECT_LOCAL):
+        raise ValidationError(
+            'Linux hosts are collected over SSH; WinRM and local collection '
+            'apply to Windows hosts only'
+        )
+    if os_type == 'WINDOWS' and method == COLLECT_SSH:
+        raise ValidationError(
+            'Windows hosts are collected locally or over WinRM, not SSH'
+        )
+
+    return method
 
 
 def validate_text(value, field, max_length):

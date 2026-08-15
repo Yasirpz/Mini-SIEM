@@ -33,6 +33,15 @@ SEVERITIES = (SEVERITY_LOW, SEVERITY_MEDIUM, SEVERITY_HIGH)
 # Ordering helper so "most severe first" sorting is unambiguous.
 SEVERITY_RANK = {SEVERITY_LOW: 1, SEVERITY_MEDIUM: 2, SEVERITY_HIGH: 3}
 
+# How a host's logs are reached.
+#   LOCAL — read the Security log of the machine running Mini-SIEM
+#   WINRM — run the query on a remote Windows PC over PowerShell remoting
+#   SSH   — run the query on a remote Linux host over SSH
+COLLECT_LOCAL = 'LOCAL'
+COLLECT_WINRM = 'WINRM'
+COLLECT_SSH = 'SSH'
+COLLECTION_METHODS = (COLLECT_LOCAL, COLLECT_WINRM, COLLECT_SSH)
+
 # Threat Intelligence registry statuses.
 IP_UNKNOWN = 'UNKNOWN'
 IP_TRUSTED = 'TRUSTED'
@@ -108,6 +117,15 @@ class Host(db.Model):
     description = db.Column(db.String(255))
     created_at = db.Column(db.DateTime, default=utcnow)
 
+    # How to reach this host's logs. Defaults are inferred from os_type when
+    # the column is empty, so hosts created before this field existed keep
+    # behaving exactly as they did.
+    collection_method = db.Column(db.String(20))
+    # Username used for remote authentication. Deliberately *not* accompanied
+    # by a password column: secrets belong in .env, never in the database,
+    # where they would end up in backups and Parquet exports.
+    remote_user = db.Column(db.String(100))
+
     log_sources = db.relationship(
         'LogSource', backref='host', lazy='dynamic', cascade='all, delete-orphan'
     )
@@ -121,6 +139,17 @@ class Host(db.Model):
         'LogArchive', backref='host', lazy='dynamic', cascade='all, delete-orphan'
     )
 
+    def effective_collection_method(self):
+        """
+        How this host should be collected from.
+
+        Falls back to the historical behaviour when unset: Linux hosts over
+        SSH, Windows hosts read locally.
+        """
+        if self.collection_method in COLLECTION_METHODS:
+            return self.collection_method
+        return COLLECT_SSH if self.os_type == 'LINUX' else COLLECT_LOCAL
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -128,6 +157,8 @@ class Host(db.Model):
             'ip_address': self.ip_address,
             'os_type': self.os_type,
             'description': self.description or '',
+            'collection_method': self.effective_collection_method(),
+            'remote_user': self.remote_user or '',
             'event_count': self.events.count(),
             'alert_count': self.alerts.count(),
         }

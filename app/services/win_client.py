@@ -150,3 +150,160 @@ class WinClient:
             "Select-Object TimeCreated, Id, Message | ConvertTo-Json"
         )
         return self.run_ps(ps_cmd)
+
+
+class RemoteWinClient(WinClient):
+    """
+    Runs the same Security-log queries on another Windows PC over PowerShell
+    remoting (WinRM).
+
+    The password is passed to PowerShell through an environment variable
+    rather than embedded in the command string. Process command lines are
+    readable by other accounts on Windows, so interpolating a credential into
+    one would expose it to anybody able to list processes.
+    """
+
+    PASSWORD_ENV_VAR = 'MINISIEM_REMOTE_PASSWORD'
+
+    def __init__(self, computer, username, password, port=None, use_ssl=False,
+                 authentication='Default'):
+        if not computer:
+            raise PowerShellError('No address configured for the remote host.')
+        if not username:
+            raise PowerShellError(
+                'No remote username configured. Set one on the host in the '
+                'Configuration page.'
+            )
+        if not password:
+            raise PowerShellError(
+                'No remote password configured. Set MINISIEM_WINRM_PASSWORD in '
+                '.env — credentials are deliberately never stored in the database.'
+            )
+
+        self.computer = computer
+        self.username = username
+        self._password = password
+        self.port = port
+        self.use_ssl = use_ssl
+        self.authentication = authentication
+
+    # ------------------------------------------------------------------
+
+    def _wrap(self, inner_script):
+        """Wrap a script so it executes on the remote computer."""
+        options = [
+            f"-ComputerName '{_ps_quote(self.computer)}'",
+            '-Credential $cred',
+            '-ErrorAction Stop',
+        ]
+        if self.port:
+            options.append(f'-Port {int(self.port)}')
+        if self.use_ssl:
+            options.append('-UseSSL')
+        if self.authentication and self.authentication != 'Default':
+            options.append(f"-Authentication {_ps_quote(self.authentication)}")
+
+        return (
+            f"$secure = ConvertTo-SecureString $env:{self.PASSWORD_ENV_VAR} "
+            "-AsPlainText -Force; "
+            "$cred = New-Object System.Management.Automation.PSCredential("
+            f"'{_ps_quote(self.username)}', $secure); "
+            "try { "
+            f"  Invoke-Command {' '.join(options)} -ScriptBlock {{ {inner_script} }} "
+            "} catch { "
+            "  [Console]::Error.WriteLine($_.Exception.Message); exit 3 "
+            "}"
+        )
+
+    def run_ps_raw(self, cmd, timeout=120):
+        """Execute a script on the remote machine, keeping the password out of argv."""
+        import os
+        import subprocess
+
+        env = os.environ.copy()
+        env[self.PASSWORD_ENV_VAR] = self._password
+
+        try:
+            result = subprocess.run(
+                [
+                    'powershell',
+                    '-NoProfile',
+                    '-NonInteractive',
+                    '-ExecutionPolicy', 'Bypass',
+                    '-Command', self._wrap(cmd),
+                ],
+                capture_output=True,
+                timeout=timeout,
+                env=env,
+            )
+        except FileNotFoundError as exc:
+            raise PowerShellError('powershell.exe was not found on PATH.') from exc
+        except subprocess.TimeoutExpired as exc:
+            raise PowerShellError(
+                f'Connection to {self.computer} timed out after {timeout}s. '
+                'Check that WinRM is enabled and reachable.'
+            ) from exc
+
+        stdout = result.stdout.decode('utf-8', errors='replace').strip()
+        stderr = result.stderr.decode('utf-8', errors='replace').strip()
+        return stdout, stderr, result.returncode
+
+    def security_log_status(self):
+        """Probe the remote Security log, translating common WinRM failures."""
+        probe = (
+            "try { "
+            "  $null = Get-WinEvent -LogName Security -MaxEvents 1 -ErrorAction Stop; "
+            "  'READABLE' "
+            "} catch { "
+            f"  if ($_.Exception.Message -match '{NO_EVENTS_MARKER}') {{ 'EMPTY' }} "
+            "  else { 'ERROR: ' + $_.Exception.Message } "
+            "}"
+        )
+
+        try:
+            stdout, stderr, _ = self.run_ps_raw(probe, timeout=90)
+        except PowerShellError as exc:
+            return False, str(exc)
+
+        text = (stdout or stderr or '').strip()
+
+        if text.endswith('READABLE') or text.endswith('EMPTY'):
+            return True, text
+        if not text:
+            return False, f'No response from {self.computer}.'
+
+        return False, _explain_winrm_failure(text.replace('ERROR: ', '', 1), self.computer)
+
+    @staticmethod
+    def is_elevated():
+        """Local elevation is irrelevant when querying another machine."""
+        return True
+
+
+def _ps_quote(value):
+    """Escape a value for use inside a single-quoted PowerShell string."""
+    return str(value).replace("'", "''")
+
+
+def _explain_winrm_failure(message, computer):
+    """Add a concrete remedy to the most common WinRM errors."""
+    lowered = message.lower()
+
+    if 'cannot find the computer' in lowered or 'winrm cannot complete' in lowered:
+        return (
+            f"{message} — WinRM does not appear to be listening on {computer}. "
+            "On that PC, run 'Enable-PSRemoting -Force' from an Administrator "
+            "PowerShell."
+        )
+    if 'access is denied' in lowered:
+        return (
+            f"{message} — the account was rejected by {computer}. It must be a "
+            "local Administrator there, and for a workgroup (non-domain) PC the "
+            "username usually needs the form COMPUTERNAME\\\\User."
+        )
+    if 'trustedhosts' in lowered:
+        return (
+            f"{message} — on this machine run: Set-Item "
+            f"WSMan:\\localhost\\Client\\TrustedHosts -Value '{computer}' -Force"
+        )
+    return message

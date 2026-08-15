@@ -58,8 +58,47 @@ def create_app(config_class=Config):
     # Auto-create tables for local/demo use (use Flask-Migrate for production)
     with app.app_context():
         db.create_all()
+        _add_missing_columns()
 
     return app
+
+
+def _add_missing_columns():
+    """
+    Add columns that were introduced after a database was first created.
+
+    db.create_all() only creates missing *tables*; it will not alter one that
+    already exists. Without this, upgrading an existing installation leaves
+    the schema behind the models and every query fails with "no such column".
+
+    Deliberately narrow: it only ever adds nullable columns, never drops or
+    rewrites anything, and is safe to run on every start. A production
+    deployment should use Flask-Migrate instead.
+    """
+    from sqlalchemy import inspect, text
+
+    additions = {
+        'hosts': {
+            'collection_method': 'VARCHAR(20)',
+            'remote_user': 'VARCHAR(100)',
+        },
+    }
+
+    inspector = inspect(db.engine)
+
+    for table, columns in additions.items():
+        if not inspector.has_table(table):
+            continue
+
+        existing = {col['name'] for col in inspector.get_columns(table)}
+
+        for name, column_type in columns.items():
+            if name in existing:
+                continue
+            db.session.execute(
+                text(f'ALTER TABLE {table} ADD COLUMN {name} {column_type}')
+            )
+            db.session.commit()
 
 
 def _ensure_folders(app):

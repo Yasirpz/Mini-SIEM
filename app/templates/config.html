@@ -38,6 +38,23 @@
                                     <option value="WINDOWS">Windows</option>
                                 </select>
                             </div>
+                            <div class="mb-2">
+                                <label class="form-label form-label-sm mb-1">Collect logs via</label>
+                                <select id="hostMethod" class="form-select form-select-sm">
+                                    <option value="">Automatic (this PC for Windows, SSH for Linux)</option>
+                                    <option value="LOCAL">This PC's own Security log</option>
+                                    <option value="WINRM">Remote Windows PC (WinRM)</option>
+                                    <option value="SSH">Remote Linux host (SSH)</option>
+                                </select>
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label form-label-sm mb-1">Remote username <span class="text-muted">(remote only)</span></label>
+                                <input type="text" id="hostRemoteUser" class="form-control form-control-sm"
+                                       placeholder="LAB-PC\Administrator">
+                                <div class="form-text small">
+                                    The password is read from <code>.env</code>, never stored in the database.
+                                </div>
+                            </div>
                             <div class="mb-3">
                                 <label class="form-label form-label-sm mb-1">Description <span class="text-muted">(optional)</span></label>
                                 <input type="text" id="hostDesc" class="form-control form-control-sm"
@@ -137,6 +154,18 @@
                         <option value="WINDOWS">Windows</option>
                     </select>
                 </div>
+                <div class="mb-2"><label class="form-label">Collect logs via</label>
+                    <select id="editHostMethod" class="form-select">
+                        <option value="">Automatic</option>
+                        <option value="LOCAL">This PC's own Security log</option>
+                        <option value="WINRM">Remote Windows PC (WinRM)</option>
+                        <option value="SSH">Remote Linux host (SSH)</option>
+                    </select>
+                </div>
+                <div class="mb-2"><label class="form-label">Remote username</label>
+                  <input type="text" id="editHostRemoteUser" class="form-control"
+                         placeholder="LAB-PC\Administrator">
+                  <div class="form-text small">Password comes from <code>.env</code>.</div></div>
                 <div class="mb-2"><label class="form-label">Description</label>
                   <input type="text" id="editHostDesc" class="form-control"></div>
             </div>

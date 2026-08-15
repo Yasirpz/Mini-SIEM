@@ -37,9 +37,20 @@ class Config:
     SSH_KEY_FILE = os.getenv('SSH_KEY_FILE', '')
     SSH_PWD = os.getenv('SSH_PASSWORD', '')
 
-    # Windows Security log collection (Event IDs 4625 and 4624).
+    # Windows Security log collection.
     # How many raw records to pull per run before interactive-logon filtering.
     WINDOWS_MAX_EVENTS = int(os.getenv('WINDOWS_MAX_EVENTS', 200))
+
+    # Remote Windows collection over PowerShell remoting (WinRM).
+    # The password lives here, read from .env — never in the database, where
+    # it would leak into backups and exports. A per-host override can be set
+    # as MINISIEM_WINRM_PASSWORD_<HOSTNAME> (uppercased, non-alphanumerics
+    # replaced with underscores).
+    WINRM_DEFAULT_USER = os.getenv('MINISIEM_WINRM_USER', '')
+    WINRM_PASSWORD = os.getenv('MINISIEM_WINRM_PASSWORD', '')
+    WINRM_PORT = int(os.getenv('MINISIEM_WINRM_PORT', 0)) or None
+    WINRM_USE_SSL = os.getenv('MINISIEM_WINRM_USE_SSL', 'false').lower() == 'true'
+    WINRM_AUTH = os.getenv('MINISIEM_WINRM_AUTH', 'Default')
 
     # Folder used to store raw collected logs (Parquet) for forensic retention
     STORAGE_FOLDER = BASE_DIR / 'storage'
