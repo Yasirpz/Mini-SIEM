@@ -10,8 +10,16 @@ from datetime import datetime
 from flask import current_app
 
 from app.models import (
+    EVT_ACCOUNT_CREATED,
+    EVT_ACCOUNT_ENABLED,
+    EVT_ACCOUNT_LOCKOUT,
+    EVT_ADMIN_LOGON,
+    EVT_AUDIT_LOG_CLEARED,
+    EVT_EXPLICIT_CREDENTIALS,
     EVT_FAILED_LOGIN,
+    EVT_GROUP_MEMBER_ADDED,
     EVT_INVALID_USER,
+    EVT_PASSWORD_RESET,
     EVT_SUCCESSFUL_LOGIN,
     EVT_SUDO_USAGE,
     EVT_WIN_FAILED_LOGIN,
@@ -22,6 +30,41 @@ from app.models import (
 # 4625 = an account failed to log on.  4624 = an account logged on successfully.
 WIN_EVENT_FAILED_LOGON = 4625
 WIN_EVENT_SUCCESSFUL_LOGON = 4624
+
+# Every Windows Security event the collector understands, and the normalized
+# type each becomes. Anything not listed here is skipped rather than guessed
+# at, so an unfamiliar event can never be mislabelled.
+WIN_EVENT_TYPES = {
+    4625: EVT_WIN_FAILED_LOGIN,       # account failed to log on
+    4624: EVT_SUCCESSFUL_LOGIN,       # account logged on
+    4740: EVT_ACCOUNT_LOCKOUT,        # account locked out after repeated failures
+    4648: EVT_EXPLICIT_CREDENTIALS,   # logon using explicit credentials (runas)
+    4672: EVT_ADMIN_LOGON,            # special privileges assigned to a new logon
+    4720: EVT_ACCOUNT_CREATED,        # a user account was created
+    4722: EVT_ACCOUNT_ENABLED,        # a user account was enabled
+    4724: EVT_PASSWORD_RESET,         # an attempt was made to reset a password
+    4732: EVT_GROUP_MEMBER_ADDED,     # member added to a security-enabled local group
+    1102: EVT_AUDIT_LOG_CLEARED,      # the audit log was cleared
+}
+
+# Human-readable summary per event id, used in the stored message.
+WIN_EVENT_DESCRIPTIONS = {
+    4625: 'logon failure',
+    4624: 'successful logon',
+    4740: 'account locked out',
+    4648: 'logon with explicit credentials',
+    4672: 'administrative privileges assigned',
+    4720: 'user account created',
+    4722: 'user account enabled',
+    4724: 'password reset attempt',
+    4732: 'added to a security group',
+    1102: 'AUDIT LOG CLEARED',
+}
+
+# Events that describe a person signing in, and therefore need the
+# interactive-logon-type filter to keep service noise out. The rest describe
+# discrete administrative actions that are always worth recording.
+WIN_LOGON_EVENTS = (4624, 4672)
 
 # Windows records a successful logon (4624) for a great deal of routine
 # machine activity — services starting, scheduled tasks, the window manager.
@@ -177,7 +220,7 @@ class LogCollector:
         Get-WinEvent reports an empty match as an error.
         """
         max_events = max_events or _config('WINDOWS_MAX_EVENTS', WIN_DEFAULT_MAX_EVENTS)
-        ids = f"{WIN_EVENT_FAILED_LOGON},{WIN_EVENT_SUCCESSFUL_LOGON}"
+        ids = ','.join(str(i) for i in WIN_EVENT_TYPES)
 
         if last_fetch_time:
             ts_str = last_fetch_time.strftime('%Y-%m-%d %H:%M:%S')
@@ -208,17 +251,20 @@ class LogCollector:
             "   foreach ($d in $xml.Event.EventData.Data) { $data[$d.Name] = $d.'#text' }; "
             "   $logonType = [string]$data['LogonType']; "
             "   $account = [string]$data['TargetUserName']; "
-            f"   $keep = $rec.Id -eq {WIN_EVENT_FAILED_LOGON}; "
-            "   if (-not $keep) { "
+            "   if (-not $account) { $account = [string]$data['SubjectUserName'] } "
+            # Sign-in events need the interactive filter to keep service noise
+            # out; administrative actions are always kept.
+            f"   if ($rec.Id -in @({','.join(str(i) for i in WIN_LOGON_EVENTS)})) {{ "
             f"      $keep = ($logonType -in @({logon_types})) -and "
             f"              ($account -notin @({ignored})) -and "
             "              (-not $account.EndsWith('$')) "
-            "   } "
+            "   } else { $keep = $true } "
             "   if ($keep) { "
             "      [PSCustomObject]@{ "
             "         Timestamp = $rec.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'); "
             "         EventId = $rec.Id; "
             "         TargetUserName = $account; "
+            "         SubjectUserName = [string]$data['SubjectUserName']; "
             "         IpAddress = [string]$data['IpAddress']; "
             "         LogonType = $logonType; "
             "         WorkstationName = [string]$data['WorkstationName']; "
@@ -293,16 +339,20 @@ class LogCollector:
         except (TypeError, ValueError):
             return None
 
-        if event_id == WIN_EVENT_FAILED_LOGON:
-            alert_type = EVT_WIN_FAILED_LOGIN
-            outcome = 'logon failure'
-        elif event_id == WIN_EVENT_SUCCESSFUL_LOGON:
-            alert_type = EVT_SUCCESSFUL_LOGIN
-            outcome = 'successful logon'
-        else:
+        alert_type = WIN_EVENT_TYPES.get(event_id)
+        if alert_type is None:
             return None
 
-        user = (entry.get('TargetUserName') or '').strip() or 'UNKNOWN'
+        outcome = WIN_EVENT_DESCRIPTIONS.get(event_id, f'event {event_id}')
+
+        # Account-management events name the affected account in
+        # TargetUserName and the actor in SubjectUserName; fall back so the
+        # event is never stored with an empty user.
+        user = (
+            (entry.get('TargetUserName') or '').strip()
+            or (entry.get('SubjectUserName') or '').strip()
+            or 'UNKNOWN'
+        )
         ip = (entry.get('IpAddress') or '').strip()
         workstation = (entry.get('WorkstationName') or '').strip()
         logon_type = (entry.get('LogonType') or '').strip()

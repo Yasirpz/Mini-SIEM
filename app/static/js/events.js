@@ -325,6 +325,17 @@ function eventTypeClasses(eventType) {
             return ['bg-warning', 'text-dark'];
         case 'SUCCESSFUL_LOGIN':
             return ['bg-success'];
+        // Post-compromise activity: privilege, persistence, anti-forensics.
+        case 'ACCOUNT_LOCKOUT':
+        case 'AUDIT_LOG_CLEARED':
+        case 'ACCOUNT_CREATED':
+        case 'GROUP_MEMBER_ADDED':
+        case 'PASSWORD_RESET':
+            return ['bg-danger'];
+        case 'ADMIN_LOGON':
+        case 'EXPLICIT_CREDENTIALS':
+        case 'ACCOUNT_ENABLED':
+            return ['bg-primary'];
         default:
             return ['bg-secondary'];
     }

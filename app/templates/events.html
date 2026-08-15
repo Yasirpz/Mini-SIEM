@@ -118,11 +118,27 @@
         <label class="form-label form-label-sm mb-1">Event type</label>
         <select id="filterType" class="form-select form-select-sm">
           <option value="">All types</option>
-          <option value="FAILED_LOGIN">Failed login</option>
-          <option value="INVALID_USER">Invalid user</option>
-          <option value="WIN_FAILED_LOGIN">Windows failed logon</option>
-          <option value="SUCCESSFUL_LOGIN">Successful login</option>
-          <option value="SUDO_USAGE">Sudo usage</option>
+          <optgroup label="Authentication">
+            <option value="FAILED_LOGIN">Failed login</option>
+            <option value="INVALID_USER">Invalid user</option>
+            <option value="WIN_FAILED_LOGIN">Windows failed logon (4625)</option>
+            <option value="SUCCESSFUL_LOGIN">Successful login (4624)</option>
+            <option value="ACCOUNT_LOCKOUT">Account locked out (4740)</option>
+          </optgroup>
+          <optgroup label="Privilege">
+            <option value="ADMIN_LOGON">Administrative logon (4672)</option>
+            <option value="EXPLICIT_CREDENTIALS">Explicit credentials (4648)</option>
+            <option value="SUDO_USAGE">Sudo usage</option>
+          </optgroup>
+          <optgroup label="Account management">
+            <option value="ACCOUNT_CREATED">Account created (4720)</option>
+            <option value="ACCOUNT_ENABLED">Account enabled (4722)</option>
+            <option value="PASSWORD_RESET">Password reset (4724)</option>
+            <option value="GROUP_MEMBER_ADDED">Added to group (4732)</option>
+          </optgroup>
+          <optgroup label="Anti-forensics">
+            <option value="AUDIT_LOG_CLEARED">Audit log cleared (1102)</option>
+          </optgroup>
         </select>
       </div>
       <div class="col-6 col-md-3">

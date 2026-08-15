@@ -46,8 +46,37 @@ EVT_WIN_FAILED_LOGIN = 'WIN_FAILED_LOGIN'
 EVT_SUCCESSFUL_LOGIN = 'SUCCESSFUL_LOGIN'
 EVT_SUDO_USAGE = 'SUDO_USAGE'
 
+# Wider Windows Security activity, beyond plain logon success and failure.
+# These describe the *consequences* of an attack and the actions an intruder
+# takes afterwards, so they give the dashboard a fuller picture than
+# authentication attempts alone.
+EVT_ACCOUNT_LOCKOUT = 'ACCOUNT_LOCKOUT'              # 4740
+EVT_EXPLICIT_CREDENTIALS = 'EXPLICIT_CREDENTIALS'    # 4648
+EVT_ADMIN_LOGON = 'ADMIN_LOGON'                      # 4672
+EVT_ACCOUNT_CREATED = 'ACCOUNT_CREATED'              # 4720
+EVT_ACCOUNT_ENABLED = 'ACCOUNT_ENABLED'              # 4722
+EVT_GROUP_MEMBER_ADDED = 'GROUP_MEMBER_ADDED'        # 4732
+EVT_PASSWORD_RESET = 'PASSWORD_RESET'                # 4724
+EVT_AUDIT_LOG_CLEARED = 'AUDIT_LOG_CLEARED'          # 1102
+
 # Event types that the detection rules treat as authentication failures.
+# Deliberately unchanged: rule R-01 counts login *attempts*, so a lockout
+# (the result of failures already counted) must not inflate it, and a
+# successful logon must never contribute to a brute-force score.
 FAILURE_EVENT_TYPES = (EVT_FAILED_LOGIN, EVT_INVALID_USER, EVT_WIN_FAILED_LOGIN)
+
+# Activity that is not an attack in itself but is worth surfacing, because it
+# is what an intruder does once inside: gaining privilege, creating accounts,
+# widening group membership, or erasing the evidence.
+SENSITIVE_EVENT_TYPES = (
+    EVT_ACCOUNT_LOCKOUT,
+    EVT_EXPLICIT_CREDENTIALS,
+    EVT_ACCOUNT_CREATED,
+    EVT_ACCOUNT_ENABLED,
+    EVT_GROUP_MEMBER_ADDED,
+    EVT_PASSWORD_RESET,
+    EVT_AUDIT_LOG_CLEARED,
+)
 
 
 # === USER MODEL (Administrator accounts) ===

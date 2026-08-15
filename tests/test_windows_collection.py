@@ -103,8 +103,62 @@ def test_event_id_is_accepted_as_a_string():
     assert parsed['alert_type'] == EVT_WIN_FAILED_LOGIN
 
 
-def test_unrelated_event_id_is_skipped_not_mislabelled():
-    assert LogCollector.parse_windows_event(win_record(4672)) is None
+@pytest.mark.parametrize('event_id, expected', [
+    (4740, 'ACCOUNT_LOCKOUT'),
+    (4648, 'EXPLICIT_CREDENTIALS'),
+    (4672, 'ADMIN_LOGON'),
+    (4720, 'ACCOUNT_CREATED'),
+    (4722, 'ACCOUNT_ENABLED'),
+    (4724, 'PASSWORD_RESET'),
+    (4732, 'GROUP_MEMBER_ADDED'),
+    (1102, 'AUDIT_LOG_CLEARED'),
+])
+def test_wider_security_events_are_classified(event_id, expected):
+    parsed = LogCollector.parse_windows_event(win_record(event_id))
+    assert parsed['alert_type'] == expected
+    assert str(event_id) in parsed['message']
+
+
+def test_an_unrecognised_event_id_is_skipped_not_mislabelled():
+    """An event the collector does not understand must be dropped, not guessed."""
+    assert LogCollector.parse_windows_event(win_record(4689)) is None
+
+
+def test_account_management_events_fall_back_to_the_acting_user():
+    """4720 and friends may leave TargetUserName empty; the actor still matters."""
+    record = win_record(4720, user='')
+    record['SubjectUserName'] = 'attacker'
+
+    parsed = LogCollector.parse_windows_event(record)
+    assert parsed['user'] == 'attacker'
+
+
+def test_new_event_types_do_not_feed_the_brute_force_rule(app):
+    """
+    A lockout is the *consequence* of failures R-01 has already counted.
+    Letting it feed the rule would double-count the same incident.
+    """
+    from app.models import FAILURE_EVENT_TYPES
+
+    for event_type in ('ACCOUNT_LOCKOUT', 'ADMIN_LOGON', 'AUDIT_LOG_CLEARED',
+                       'ACCOUNT_CREATED', 'EXPLICIT_CREDENTIALS'):
+        assert event_type not in FAILURE_EVENT_TYPES
+
+
+def test_query_requests_every_supported_event_id(app):
+    cmd = LogCollector.build_windows_query()
+    for event_id in (4625, 4624, 4740, 4648, 4672, 4720, 4722, 4724, 4732, 1102):
+        assert str(event_id) in cmd
+
+
+def test_administrative_events_bypass_the_interactive_logon_filter(app):
+    """
+    The interactive filter exists to suppress service-account noise on logon
+    events. Applying it to account-management events would discard them,
+    since they carry no logon type at all.
+    """
+    cmd = LogCollector.build_windows_query()
+    assert '$keep = $true' in cmd
 
 
 def test_missing_event_id_is_skipped():
@@ -386,7 +440,8 @@ def test_a_powershell_failure_is_raised_not_swallowed(app):
 
 
 def test_unrelated_records_are_dropped_from_the_batch(app):
-    client = FakeWinClient([win_record(4625), win_record(4672), win_record(4624)])
+    # 4689 (process exited) is not a security-relevant logon or account event.
+    client = FakeWinClient([win_record(4625), win_record(4689), win_record(4624)])
     logs = LogCollector.get_windows_logs(client)
     assert len(logs) == 2
 
