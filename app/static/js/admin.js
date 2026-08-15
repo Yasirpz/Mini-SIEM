@@ -3,7 +3,7 @@
  */
 import { createEl, clearContainer, notify, formatTime } from './dom.js';
 import {
-    fetchHosts, createHost, updateHost, removeHost,
+    fetchHosts, createHost, updateHost, removeHost, triggerLogFetch,
     fetchIPs, createIP, updateIP, removeIP,
 } from './api.js';
 
@@ -76,6 +76,12 @@ function renderHostRow(host) {
 
     const btnGroup = createEl('div', ['btn-group', 'btn-group-sm', 'flex-shrink-0'], '', item);
 
+    const collectBtn = createEl('button', ['btn', 'btn-primary'], 'Collect Logs', btnGroup);
+    collectBtn.title = host.os_type === 'WINDOWS'
+        ? 'Read this machine\'s Windows Security log (Event 4625/4624) and run the detection rules'
+        : 'Collect authentication logs over SSH and run the detection rules';
+    collectBtn.addEventListener('click', () => handleCollectLogs(host, collectBtn));
+
     const editBtn = createEl('button', ['btn', 'btn-outline-secondary'], 'Edit', btnGroup);
     editBtn.addEventListener('click', () => openHostModal(host));
 
@@ -95,6 +101,51 @@ function renderHostRow(host) {
             notify(err.message, 'danger');
         }
     });
+}
+
+/**
+ * Collect logs for one host through the existing authenticated endpoint,
+ * then refresh the list so the event and alert counts reflect the result.
+ */
+async function handleCollectLogs(host, button) {
+    if (button.disabled) return;
+
+    const originalText = button.textContent;
+    button.disabled = true;
+    clearContainer(button);
+    createEl('span', ['spinner-border', 'spinner-border-sm', 'me-1'], '', button);
+    createEl('span', [], 'Collecting…', button);
+
+    try {
+        const result = await triggerLogFetch(host.id);
+        const stored = result.events_stored || 0;
+        const received = result.events_received || 0;
+        const newAlerts = (result.alerts && result.alerts.total) || 0;
+
+        if (received === 0) {
+            notify(
+                `No new log entries on "${host.hostname}". ` +
+                'Sign in incorrectly a few times, then collect again.',
+                'info',
+            );
+        } else {
+            let message = `Collected ${received} log entries, stored ${stored} new events`;
+            if (result.duplicates_skipped) {
+                message += ` (${result.duplicates_skipped} already seen)`;
+            }
+            message += newAlerts > 0
+                ? `. Detection raised ${newAlerts} new alert(s) — see the Alerts page.`
+                : '. No new alerts; the detection thresholds were not reached.';
+            notify(message, newAlerts > 0 ? 'warning' : 'success');
+        }
+
+        await refreshHosts();
+    } catch (err) {
+        notify(`Collection failed for "${host.hostname}": ${err.message}`, 'danger');
+        button.disabled = false;
+        clearContainer(button);
+        button.textContent = originalText;
+    }
 }
 
 async function handleAddHost(event) {

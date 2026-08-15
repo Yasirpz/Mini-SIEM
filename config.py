@@ -37,6 +37,10 @@ class Config:
     SSH_KEY_FILE = os.getenv('SSH_KEY_FILE', '')
     SSH_PWD = os.getenv('SSH_PASSWORD', '')
 
+    # Windows Security log collection (Event IDs 4625 and 4624).
+    # How many raw records to pull per run before interactive-logon filtering.
+    WINDOWS_MAX_EVENTS = int(os.getenv('WINDOWS_MAX_EVENTS', 200))
+
     # Folder used to store raw collected logs (Parquet) for forensic retention
     STORAGE_FOLDER = BASE_DIR / 'storage'
 

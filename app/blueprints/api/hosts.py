@@ -203,6 +203,18 @@ def fetch_logs(host_id):
     elif host.os_type == 'WINDOWS':
         try:
             with WinClient() as win:
+                # A non-elevated process cannot read the Security log, and
+                # Get-WinEvent fails silently in that case. Checking first
+                # turns a confusing empty result into an actionable message.
+                if not win.can_read_security_log():
+                    return jsonify({
+                        'error': (
+                            'Cannot read the Windows Security log. Start Mini-SIEM '
+                            'from a PowerShell window opened with "Run as Administrator", '
+                            'and confirm that logon auditing is enabled.'
+                        )
+                    }), 403
+
                 logs = LogCollector.get_windows_logs(win, last_fetch_time=log_source.last_fetch)
         except Exception as exc:
             return jsonify({'error': f"Windows collection error: {exc}"}), 500

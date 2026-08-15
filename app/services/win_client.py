@@ -12,18 +12,36 @@ class WinClient:
 
     def run_ps(self, cmd):
         """Run a PowerShell command and return its stdout."""
-        full_cmd = ["powershell", "-Command", cmd]
+        full_cmd = ['powershell', '-NoProfile', '-NonInteractive', '-Command', cmd]
 
         result = subprocess.run(
             full_cmd,
             capture_output=True,
             text=True,
             encoding='oem',
+            timeout=120,
         )
         if result.returncode != 0:
             raise Exception(f"PowerShell error: {result.stderr.strip()}")
 
         return result.stdout.strip()
+
+    def can_read_security_log(self):
+        """
+        Report whether the Security event log is readable.
+
+        Reading it requires an elevated process. Checking explicitly lets the
+        API return "run as Administrator" rather than the indistinguishable
+        "no new log entries" that a silent permission failure would produce.
+        """
+        probe = (
+            "try { Get-WinEvent -LogName Security -MaxEvents 1 -ErrorAction Stop | "
+            "Out-Null; 'OK' } catch { 'DENIED' }"
+        )
+        try:
+            return self.run_ps(probe).strip().endswith('OK')
+        except Exception:
+            return False
 
     def get_logs_json(self, log_name, limit=10):
         """Fetch a Windows event log as JSON."""

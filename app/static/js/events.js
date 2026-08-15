@@ -303,16 +303,31 @@ function render(events) {
         createEl('td', ['small'], event.host_name, row);
 
         const typeCell = createEl('td', [], '', row);
-        const isFailure = ['FAILED_LOGIN', 'INVALID_USER', 'WIN_FAILED_LOGIN']
-            .includes(event.event_type);
-        createEl('span', ['badge', isFailure ? 'bg-warning' : 'bg-secondary',
-            isFailure ? 'text-dark' : ''].filter(Boolean), event.event_type, typeCell);
+        createEl('span', ['badge', ...eventTypeClasses(event.event_type)],
+            event.event_type, typeCell);
 
         createEl('td', ['font-monospace', 'small'], event.source_ip || '-', row);
         createEl('td', ['small'], event.username || '-', row);
         createEl('td', ['small', 'text-truncate'], event.message || '', row).style.maxWidth = '340px';
         createEl('td', ['small', 'text-muted'], event.origin, row);
     });
+}
+
+/**
+ * Badge styling per event type: failures amber, successful logons green, so
+ * a mixed Windows collection is readable at a glance.
+ */
+function eventTypeClasses(eventType) {
+    switch (eventType) {
+        case 'FAILED_LOGIN':
+        case 'INVALID_USER':
+        case 'WIN_FAILED_LOGIN':
+            return ['bg-warning', 'text-dark'];
+        case 'SUCCESSFUL_LOGIN':
+            return ['bg-success'];
+        default:
+            return ['bg-secondary'];
+    }
 }
 
 function updatePager() {
