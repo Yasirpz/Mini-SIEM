@@ -618,7 +618,9 @@ def test_collect_endpoint_stores_collected_events(auth_client, app, monkeypatch)
 
     payload = response.get_json()
     assert payload['events_stored'] == 2
-    assert 'Collected 2 log entries' in payload['message']
+    # The message now reports received / new / duplicate counts separately.
+    assert 'Received 2' in payload['message']
+    assert 'stored 2 new' in payload['message']
     assert Event.query.filter_by(host_id=host.id).count() == 2
 
 

@@ -4,7 +4,7 @@
 import { createEl, clearContainer, notify, formatTime } from './dom.js';
 import {
     fetchHosts, createHost, updateHost, removeHost, triggerLogFetch,
-    fetchIPs, createIP, updateIP, removeIP,
+    testHostConnection, fetchIPs, createIP, updateIP, removeIP,
 } from './api.js';
 
 const hostsContainer = document.getElementById('hostsListAdmin');
@@ -68,6 +68,18 @@ function renderHostRow(host) {
     createEl('span', ['fw-bold', 'me-2'], host.hostname, title);
     createEl('small', ['text-muted', 'font-monospace', 'me-2'], host.ip_address, title);
 
+    // Health first: it is the thing an operator looks for.
+    const statusStyles = {
+        ONLINE: ['bg-success', '🟢 online'],
+        DEGRADED: ['bg-warning text-dark', '🟡 degraded'],
+        OFFLINE: ['bg-danger', '🔴 offline'],
+        UNKNOWN: ['bg-secondary', '⚪ not yet contacted'],
+    };
+    const [statusClass, statusLabel] = statusStyles[host.status] || statusStyles.UNKNOWN;
+    const statusBadge = createEl('span',
+        ['badge', ...statusClass.split(' '), 'me-2'], statusLabel, title);
+    if (host.last_error) statusBadge.title = host.last_error;
+
     // Make it obvious whether a host is read locally or over the network.
     const methodLabels = {
         LOCAL: 'local',
@@ -77,6 +89,17 @@ function renderHostRow(host) {
     const badgeClass = host.collection_method === 'LOCAL' ? 'bg-secondary' : 'bg-info';
     createEl('span', ['badge', badgeClass],
         methodLabels[host.collection_method] || host.collection_method, title);
+
+    const facts = [];
+    if (host.last_success) facts.push(`last collected ${formatTime(host.last_success)}`);
+    if (host.last_latency_ms != null) facts.push(`${host.last_latency_ms} ms`);
+    facts.push(`${host.event_count} events`, `${host.alert_count} alerts`);
+    createEl('div', ['small', 'text-muted'], facts.join(' · '), info);
+
+    if (host.last_error) {
+        createEl('div', ['small', 'text-danger', 'text-truncate'],
+            `Last error: ${host.last_error}`, info).style.maxWidth = '460px';
+    }
 
     if (host.description) {
         createEl('small', ['d-block', 'text-muted', 'text-truncate'], host.description, info);
@@ -93,6 +116,10 @@ function renderHostRow(host) {
         SSH: `Collect authentication logs from ${host.ip_address} over SSH and run the detection rules`,
     }[host.collection_method] || 'Collect logs and run the detection rules';
     collectBtn.addEventListener('click', () => handleCollectLogs(host, collectBtn));
+
+    const testBtn = createEl('button', ['btn', 'btn-outline-primary'], 'Test', btnGroup);
+    testBtn.title = 'Check reachability, authentication and log access separately';
+    testBtn.addEventListener('click', () => handleTestConnection(host, testBtn));
 
     const editBtn = createEl('button', ['btn', 'btn-outline-secondary'], 'Edit', btnGroup);
     editBtn.addEventListener('click', () => openHostModal(host));
@@ -113,6 +140,59 @@ function renderHostRow(host) {
             notify(err.message, 'danger');
         }
     });
+}
+
+/**
+ * Run the staged connection test and show each check on its own line, so a
+ * failure points at the specific thing that needs fixing.
+ */
+async function handleTestConnection(host, button) {
+    if (button.disabled) return;
+
+    const originalText = button.textContent;
+    button.disabled = true;
+    clearContainer(button);
+    createEl('span', ['spinner-border', 'spinner-border-sm'], '', button);
+
+    try {
+        const result = await testHostConnection(host.id);
+        renderTestResult(host, result);
+        await refreshHosts();
+    } catch (err) {
+        notify(`Test failed for "${host.hostname}": ${err.message}`, 'danger');
+    } finally {
+        button.disabled = false;
+        clearContainer(button);
+        button.textContent = originalText;
+    }
+}
+
+function renderTestResult(host, result) {
+    const area = document.getElementById('toastArea');
+    if (!area) return;
+
+    clearContainer(area);
+    const box = createEl('div',
+        ['alert', result.ok ? 'alert-success' : 'alert-danger',
+            'alert-dismissible', 'fade', 'show'], '', area);
+
+    createEl('div', ['fw-bold', 'mb-2'],
+        `${host.hostname} — ${result.ok ? 'all checks passed' : 'a check failed'} `
+        + `(${result.latency_ms} ms, ${result.collection_method})`, box);
+
+    const list = createEl('ul', ['mb-0', 'ps-3'], '', box);
+    result.checks.forEach((check) => {
+        const item = createEl('li', ['small'], '', list);
+        createEl('span', ['fw-semibold', 'me-1'],
+            `${check.ok ? '✓' : '✗'} ${check.name}`, item);
+        if (check.detail) {
+            createEl('span', ['text-muted'], `— ${check.detail}`, item);
+        }
+    });
+
+    const close = createEl('button', ['btn-close'], '', box);
+    close.type = 'button';
+    close.setAttribute('data-bs-dismiss', 'alert');
 }
 
 /**

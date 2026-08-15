@@ -72,6 +72,9 @@ export function checkHostStatus(id, osType) {
 export const triggerLogFetch = (hostId) =>
     request(`/api/hosts/${hostId}/logs`, { method: 'POST' });
 
+export const testHostConnection = (hostId) =>
+    request(`/api/hosts/${hostId}/test`, { method: 'POST' });
+
 // --- THREAT INTELLIGENCE (IP REGISTRY) ---
 export const fetchIPs = () => request('/api/ips');
 export const createIP = (data) => request('/api/ips', { method: 'POST', body: jsonBody(data) });

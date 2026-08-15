@@ -41,6 +41,14 @@ class Config:
     # How many raw records to pull per run before interactive-logon filtering.
     WINDOWS_MAX_EVENTS = int(os.getenv('WINDOWS_MAX_EVENTS', 200))
 
+    # Event 4688 (process creation) fires thousands of times an hour on a
+    # normal desktop and would bury the authentication events this project is
+    # about, so it is off unless explicitly enabled. Command lines are never
+    # collected either way — they routinely contain passwords and tokens.
+    WINDOWS_COLLECT_PROCESS_EVENTS = (
+        os.getenv('WINDOWS_COLLECT_PROCESS_EVENTS', 'false').lower() == 'true'
+    )
+
     # Remote Windows collection over PowerShell remoting (WinRM).
     # The password lives here, read from .env — never in the database, where
     # it would leak into backups and exports. A per-host override can be set

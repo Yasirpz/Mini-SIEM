@@ -42,6 +42,18 @@ COLLECT_WINRM = 'WINRM'
 COLLECT_SSH = 'SSH'
 COLLECTION_METHODS = (COLLECT_LOCAL, COLLECT_WINRM, COLLECT_SSH)
 
+# Host health, derived from what collection actually did — never from the
+# host merely existing in the database.
+HOST_ONLINE = 'ONLINE'        # last attempt succeeded, and it was recent
+HOST_DEGRADED = 'DEGRADED'    # has worked before, but the last attempt failed
+HOST_OFFLINE = 'OFFLINE'      # failing, and no recent success
+HOST_UNKNOWN = 'UNKNOWN'      # never contacted
+HOST_STATUSES = (HOST_ONLINE, HOST_DEGRADED, HOST_OFFLINE, HOST_UNKNOWN)
+
+# A host whose last success is older than this is no longer counted online,
+# even if nothing has failed since — silence is not the same as health.
+HOST_STALE_AFTER_MINUTES = 60
+
 # Threat Intelligence registry statuses.
 IP_UNKNOWN = 'UNKNOWN'
 IP_TRUSTED = 'TRUSTED'
@@ -67,6 +79,8 @@ EVT_ACCOUNT_ENABLED = 'ACCOUNT_ENABLED'              # 4722
 EVT_GROUP_MEMBER_ADDED = 'GROUP_MEMBER_ADDED'        # 4732
 EVT_PASSWORD_RESET = 'PASSWORD_RESET'                # 4724
 EVT_AUDIT_LOG_CLEARED = 'AUDIT_LOG_CLEARED'          # 1102
+EVT_ACCOUNT_DELETED = 'ACCOUNT_DELETED'              # 4726
+EVT_PROCESS_CREATED = 'PROCESS_CREATED'              # 4688
 
 # Event types that the detection rules treat as authentication failures.
 # Deliberately unchanged: rule R-01 counts login *attempts*, so a lockout
@@ -81,6 +95,7 @@ SENSITIVE_EVENT_TYPES = (
     EVT_ACCOUNT_LOCKOUT,
     EVT_EXPLICIT_CREDENTIALS,
     EVT_ACCOUNT_CREATED,
+    EVT_ACCOUNT_DELETED,
     EVT_ACCOUNT_ENABLED,
     EVT_GROUP_MEMBER_ADDED,
     EVT_PASSWORD_RESET,
@@ -126,6 +141,14 @@ class Host(db.Model):
     # where they would end up in backups and Parquet exports.
     remote_user = db.Column(db.String(100))
 
+    # --- Collection health -------------------------------------------------
+    # Recorded from real collection outcomes so the dashboard reports what the
+    # system actually observed rather than what it hopes is true.
+    last_attempt = db.Column(db.DateTime)
+    last_success = db.Column(db.DateTime)
+    last_error = db.Column(db.String(500))
+    last_latency_ms = db.Column(db.Integer)
+
     log_sources = db.relationship(
         'LogSource', backref='host', lazy='dynamic', cascade='all, delete-orphan'
     )
@@ -150,6 +173,47 @@ class Host(db.Model):
             return self.collection_method
         return COLLECT_SSH if self.os_type == 'LINUX' else COLLECT_LOCAL
 
+    def health(self):
+        """
+        Derive the host's status from real collection outcomes.
+
+        A host is ONLINE only when a collection actually succeeded recently.
+        Having a row in the database proves nothing about reachability, so
+        an uncontacted host is UNKNOWN rather than optimistically ONLINE.
+        """
+        if self.last_attempt is None:
+            return HOST_UNKNOWN
+
+        succeeded_last = (
+            self.last_success is not None
+            and (self.last_error is None or self.last_success >= self.last_attempt)
+        )
+
+        fresh = (
+            self.last_success is not None
+            and (utcnow() - self.last_success).total_seconds()
+            < HOST_STALE_AFTER_MINUTES * 60
+        )
+
+        if succeeded_last:
+            return HOST_ONLINE if fresh else HOST_DEGRADED
+
+        # The last attempt failed. If it has worked at some point, treat it as
+        # degraded rather than offline so a single blip is not alarming.
+        return HOST_DEGRADED if fresh else HOST_OFFLINE
+
+    def record_attempt(self, success, error=None, latency_ms=None):
+        """Record the outcome of a collection or connection test."""
+        now = utcnow()
+        self.last_attempt = now
+        self.last_latency_ms = latency_ms
+
+        if success:
+            self.last_success = now
+            self.last_error = None
+        else:
+            self.last_error = (error or 'Unknown error')[:500]
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -161,6 +225,11 @@ class Host(db.Model):
             'remote_user': self.remote_user or '',
             'event_count': self.events.count(),
             'alert_count': self.alerts.count(),
+            'status': self.health(),
+            'last_attempt': _fmt(self.last_attempt),
+            'last_success': _fmt(self.last_success),
+            'last_error': self.last_error,
+            'last_latency_ms': self.last_latency_ms,
         }
 
 

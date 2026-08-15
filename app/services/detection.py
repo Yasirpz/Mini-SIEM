@@ -27,6 +27,12 @@ from app.models import (
     Event,
     IPRegistry,
     FAILURE_EVENT_TYPES,
+    EVT_ACCOUNT_CREATED,
+    EVT_ACCOUNT_DELETED,
+    EVT_ACCOUNT_LOCKOUT,
+    EVT_AUDIT_LOG_CLEARED,
+    EVT_GROUP_MEMBER_ADDED,
+    EVT_PASSWORD_RESET,
     EVT_INVALID_USER,
     IP_BANNED,
     IP_TRUSTED,
@@ -103,6 +109,10 @@ class DetectionEngine:
         candidates.extend(DetectionEngine.rule_02_invalid_user(events))
         candidates.extend(DetectionEngine.rule_03_threat_ip(events))
         candidates.extend(DetectionEngine.rule_04_multiple_hosts(all_events))
+        candidates.extend(DetectionEngine.rule_05_audit_log_cleared(events))
+        candidates.extend(DetectionEngine.rule_06_account_created(events))
+        candidates.extend(DetectionEngine.rule_07_privilege_change(events))
+        candidates.extend(DetectionEngine.rule_08_lockout(events))
 
         return DetectionEngine._persist(candidates)
 
@@ -282,6 +292,137 @@ class DetectionEngine:
         return results
 
     # ------------------------------------------------------------------
+    # R-05: the audit log was cleared
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def rule_05_audit_log_cleared(events):
+        """
+        Clearing the Security log destroys the evidence a SIEM depends on.
+
+        It has essentially no legitimate cause on a monitored machine, so it
+        is treated as high severity with no threshold: one occurrence is the
+        whole signal.
+        """
+        return [
+            RuleResult(
+                rule_id='R-05',
+                event=event,
+                severity=SEVERITY_HIGH,
+                alert_type='AUDIT_LOG_CLEARED',
+                message=(
+                    f"The Windows Security audit log was cleared by "
+                    f"'{event.username or 'unknown'}'. This destroys evidence and "
+                    f"is rarely legitimate."
+                ),
+            )
+            for event in events
+            if event.event_type == EVT_AUDIT_LOG_CLEARED
+        ]
+
+    # ------------------------------------------------------------------
+    # R-06: a new account appeared, or an existing one was removed
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def rule_06_account_created(events):
+        """
+        Account creation and deletion are how an intruder establishes
+        persistence or covers their tracks. Both are legitimate
+        administrative actions too, so this is medium rather than high: it
+        asks the administrator to confirm it was expected.
+        """
+        results = []
+        for event in events:
+            if event.event_type == EVT_ACCOUNT_CREATED:
+                action = 'created'
+            elif event.event_type == EVT_ACCOUNT_DELETED:
+                action = 'deleted'
+            else:
+                continue
+
+            results.append(
+                RuleResult(
+                    rule_id='R-06',
+                    event=event,
+                    severity=SEVERITY_MEDIUM,
+                    alert_type='ACCOUNT_CHANGE',
+                    message=(
+                        f"Windows account '{event.username or 'unknown'}' was "
+                        f"{action}. Confirm this was an expected administrative "
+                        f"action."
+                    ),
+                )
+            )
+        return results
+
+    # ------------------------------------------------------------------
+    # R-07: privileges were widened
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def rule_07_privilege_change(events):
+        """
+        Group membership changes and password resets are the classic
+        privilege-escalation and account-takeover steps.
+
+        Plain administrative logons (4672) are deliberately excluded: they
+        occur every time an administrator signs in normally, so alerting on
+        them would produce constant noise and teach the operator to ignore
+        the rule.
+        """
+        watched = {
+            EVT_GROUP_MEMBER_ADDED: 'was added to a security group',
+            EVT_PASSWORD_RESET: 'had its password reset by another account',
+        }
+
+        results = []
+        for event in events:
+            action = watched.get(event.event_type)
+            if action is None:
+                continue
+
+            results.append(
+                RuleResult(
+                    rule_id='R-07',
+                    event=event,
+                    severity=SEVERITY_MEDIUM,
+                    alert_type='PRIVILEGE_CHANGE',
+                    message=(
+                        f"Account '{event.username or 'unknown'}' {action}. "
+                        f"Verify the change was authorised."
+                    ),
+                )
+            )
+        return results
+
+    # ------------------------------------------------------------------
+    # R-08: an account was locked out
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def rule_08_lockout(events):
+        """
+        A lockout is Windows itself concluding that too many failures
+        occurred — independent corroboration of a password attack, and
+        meaningful even when the failures happened outside R-01's window.
+        """
+        return [
+            RuleResult(
+                rule_id='R-08',
+                event=event,
+                severity=SEVERITY_MEDIUM,
+                alert_type='ACCOUNT_LOCKOUT',
+                message=(
+                    f"Windows locked out account '{event.username or 'unknown'}' "
+                    f"after repeated failed sign-ins."
+                ),
+            )
+            for event in events
+            if event.event_type == EVT_ACCOUNT_LOCKOUT
+        ]
+
+    # ------------------------------------------------------------------
     # Threat Intelligence registry upkeep
     # ------------------------------------------------------------------
 
@@ -340,7 +481,10 @@ class DetectionEngine:
         Write candidate alerts to the database, skipping duplicates and events
         from explicitly trusted sources.
         """
-        counts = {'R-01': 0, 'R-02': 0, 'R-03': 0, 'R-04': 0}
+        counts = {
+            'R-01': 0, 'R-02': 0, 'R-03': 0, 'R-04': 0,
+            'R-05': 0, 'R-06': 0, 'R-07': 0, 'R-08': 0,
+        }
 
         if not candidates:
             counts['total'] = 0
@@ -383,7 +527,9 @@ class DetectionEngine:
             counts[candidate.rule_id] += 1
 
         db.session.commit()
-        counts['total'] = sum(counts[r] for r in ('R-01', 'R-02', 'R-03', 'R-04'))
+        counts['total'] = sum(
+            counts[rule] for rule in counts if rule.startswith('R-')
+        )
         return counts
 
 

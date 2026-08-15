@@ -81,6 +81,10 @@ def _add_missing_columns():
         'hosts': {
             'collection_method': 'VARCHAR(20)',
             'remote_user': 'VARCHAR(100)',
+            'last_attempt': 'DATETIME',
+            'last_success': 'DATETIME',
+            'last_error': 'VARCHAR(500)',
+            'last_latency_ms': 'INTEGER',
         },
     }
 

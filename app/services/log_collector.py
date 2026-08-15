@@ -11,8 +11,10 @@ from flask import current_app
 
 from app.models import (
     EVT_ACCOUNT_CREATED,
+    EVT_ACCOUNT_DELETED,
     EVT_ACCOUNT_ENABLED,
     EVT_ACCOUNT_LOCKOUT,
+    EVT_PROCESS_CREATED,
     EVT_ADMIN_LOGON,
     EVT_AUDIT_LOG_CLEARED,
     EVT_EXPLICIT_CREDENTIALS,
@@ -43,7 +45,9 @@ WIN_EVENT_TYPES = {
     4720: EVT_ACCOUNT_CREATED,        # a user account was created
     4722: EVT_ACCOUNT_ENABLED,        # a user account was enabled
     4724: EVT_PASSWORD_RESET,         # an attempt was made to reset a password
+    4726: EVT_ACCOUNT_DELETED,        # a user account was deleted
     4732: EVT_GROUP_MEMBER_ADDED,     # member added to a security-enabled local group
+    4688: EVT_PROCESS_CREATED,        # a new process was created
     1102: EVT_AUDIT_LOG_CLEARED,      # the audit log was cleared
 }
 
@@ -57,7 +61,9 @@ WIN_EVENT_DESCRIPTIONS = {
     4720: 'user account created',
     4722: 'user account enabled',
     4724: 'password reset attempt',
+    4726: 'user account deleted',
     4732: 'added to a security group',
+    4688: 'process created',
     1102: 'AUDIT LOG CLEARED',
 }
 
@@ -65,6 +71,12 @@ WIN_EVENT_DESCRIPTIONS = {
 # interactive-logon-type filter to keep service noise out. The rest describe
 # discrete administrative actions that are always worth recording.
 WIN_LOGON_EVENTS = (4624, 4672)
+
+# Process creation (4688) fires for *every* process the machine starts, which
+# on a normal desktop is thousands per hour. Collecting it by default would
+# bury the authentication events this project exists to show, so it is
+# opt-in via WINDOWS_COLLECT_PROCESS_EVENTS.
+WIN_NOISY_EVENTS = (4688,)
 
 # Windows records a successful logon (4624) for a great deal of routine
 # machine activity — services starting, scheduled tasks, the window manager.
@@ -220,7 +232,13 @@ class LogCollector:
         Get-WinEvent reports an empty match as an error.
         """
         max_events = max_events or _config('WINDOWS_MAX_EVENTS', WIN_DEFAULT_MAX_EVENTS)
-        ids = ','.join(str(i) for i in WIN_EVENT_TYPES)
+
+        wanted = [
+            event_id for event_id in WIN_EVENT_TYPES
+            if event_id not in WIN_NOISY_EVENTS
+            or _config('WINDOWS_COLLECT_PROCESS_EVENTS', False)
+        ]
+        ids = ','.join(str(i) for i in wanted)
 
         if last_fetch_time:
             ts_str = last_fetch_time.strftime('%Y-%m-%d %H:%M:%S')
@@ -265,6 +283,11 @@ class LogCollector:
             "         EventId = $rec.Id; "
             "         TargetUserName = $account; "
             "         SubjectUserName = [string]$data['SubjectUserName']; "
+            # Process name only. CommandLine is deliberately not collected:
+            # command lines routinely contain passwords and tokens, and a
+            # security tool must not become the place they are archived.
+            "         NewProcessName = [string]$data['NewProcessName']; "
+            "         ParentProcessName = [string]$data['ParentProcessName']; "
             "         IpAddress = [string]$data['IpAddress']; "
             "         LogonType = $logonType; "
             "         WorkstationName = [string]$data['WorkstationName']; "
@@ -369,15 +392,23 @@ class LogCollector:
         detail = f" via {descriptor}" if descriptor else ''
         origin = f" from {workstation}" if workstation and workstation != '-' else ''
 
+        if alert_type == EVT_PROCESS_CREATED:
+            process = (entry.get('NewProcessName') or '').strip() or 'unknown process'
+            parent = (entry.get('ParentProcessName') or '').strip()
+            parentage = f" (parent: {parent})" if parent else ''
+            message = f"Process started by '{user}': {process}{parentage}"
+        else:
+            message = (
+                f"Windows {outcome} for user '{user}'{detail}{origin} "
+                f"(Event {event_id})"
+            )
+
         return {
             'timestamp': timestamp,
             'alert_type': alert_type,
             'source_ip': ip,
             'user': user,
-            'message': (
-                f"Windows {outcome} for user '{user}'{detail}{origin} "
-                f"(Event {event_id})"
-            ),
+            'message': message,
             'raw_log': json.dumps(entry, sort_keys=True),
         }
 
