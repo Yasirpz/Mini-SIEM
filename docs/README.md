@@ -17,6 +17,8 @@ Supervisor: Dr. Asadullah Burdi
 | [TESTING.md](TESTING.md) | Test cases, results and demonstration scenario | D-06 |
 | [PRESENTATION-OUTLINE.md](PRESENTATION-OUTLINE.md) | Slide-by-slide content, viva questions, poster layout | D-09, D-10 |
 | [PROGRESS-LOG.md](PROGRESS-LOG.md) | Weekly progress and individual contributions | — |
+| [DEVELOPMENT-LOG.md](DEVELOPMENT-LOG.md) | Engineering record: what was built, what broke, and why each decision was taken | — |
+| [REAL_WORLD_LAB_SETUP.md](REAL_WORLD_LAB_SETUP.md) | Demo-day setup for local Windows, remote Windows and Linux hosts | — |
 | [AI-USE-DECLARATION.md](AI-USE-DECLARATION.md) | AI use declaration and similarity report | D-11 |
 | [../samples/README.md](../samples/README.md) | Sample log files and expected detections | D-05 |
 | [../README.md](../README.md) | Project overview and quick start | D-03 |
