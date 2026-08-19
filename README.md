@@ -37,16 +37,20 @@ ideas: log collection, normalization, correlation, and alerting.
   `TRUSTED` or `BANNED`, with source, notes and hit counts.
 - **Log collection** — pull authentication logs from Linux hosts over SSH
   (`journalctl`) or from Windows hosts via PowerShell (`Get-WinEvent`,
-  Event ID 4625).
+  Event IDs 4625, 4624, the account-management set, and 6416).
 - **Sample log import** — upload or paste Linux `auth.log` text, a Windows
   Security CSV export or JSON, or generate synthetic events, so the whole
   system can be demonstrated with no target machine at all.
 - **Forensic retention** — raw events are archived to columnar Parquet files
   before analysis, so evidence survives even if alerts are cleared.
-- **Rule-based detection engine** — four rules (R-01 … R-04) with `LOW` /
+- **USB device detection** — spots removable storage plugged into a monitored
+  Windows host (Event ID 6416) and reports the host, device, user and time.
+  Internal hardware enumerated at boot is filtered out during collection.
+- **Rule-based detection engine** — nine rules (R-01 … R-09) with `LOW` /
   `MEDIUM` / `HIGH` severities, re-runnable at any time over stored events.
 - **Dashboard** — summary statistics, Chart.js charts (failure trend,
-  severity split, alerts per rule), top attacking IPs, live host telemetry.
+  severity split, alerts per rule), top attacking IPs, recent USB devices,
+  live host telemetry.
 - **Alert triage** — filter by severity, rule, host and review status;
   acknowledge alerts as they are handled.
 
@@ -64,15 +68,23 @@ Implemented in [`app/services/detection.py`](app/services/detection.py).
 | R-06 | Account Created / Deleted | A Windows account appeared or disappeared (4720 / 4726). | `MEDIUM` |
 | R-07 | Privilege Change | An account was added to a security group, or had its password reset by someone else (4732 / 4724). | `MEDIUM` |
 | R-08 | Account Lockout | Windows locked an account out after repeated failures (4740). | `MEDIUM` |
+| R-09 | External Device Connected | A USB storage device was connected to a monitored host (Event 6416). No threshold — every connection is reported. | `MEDIUM` |
 
 R-01–R-04 detect attacks in progress. R-05–R-08 cover what an intruder does
 *after* getting in: escalating privilege, establishing persistence, and
-erasing the evidence.
+erasing the evidence. R-09 covers the physical route in and out — a USB drive
+carries data off a machine, and malware onto one, without touching the network
+the other rules watch.
 
 R-07 deliberately ignores ordinary administrative logons (4672) — they happen
 every time an admin signs in, and alerting on them would train the operator to
 ignore the rule. A lockout (R-08) does not feed R-01 either: it is the
 consequence of failures that rule has already counted.
+
+R-09 requires Plug and Play auditing to be enabled on the monitored machine
+(see [`docs/REAL_WORLD_LAB_SETUP.md`](docs/REAL_WORLD_LAB_SETUP.md)). Where it
+is not enabled the host simply reports no device events — collection carries
+on normally rather than failing.
 
 Thresholds are configurable in `.env` (see `.env.example`). Addresses marked
 `TRUSTED` are suppressed entirely. Re-running detection never duplicates an
@@ -118,7 +130,7 @@ log, read directly  log, read remotely    read over SSH
                             ▼
                Parquet archive + Event table
                             ▼
-              Detection engine (R-01 … R-08)
+              Detection engine (R-01 … R-09)
                             ▼
                      Alerts → Dashboard
 ```
@@ -150,7 +162,7 @@ Log sources
   Event table (SQLite)
         │
         ▼
-  Detection rule engine (R-01 … R-04)
+  Detection rule engine (R-01 … R-09)
         │
         ▼
   Alert table  ──▶  Web dashboard, alert triage, charts
@@ -188,7 +200,7 @@ mini-siem/
 │   │   ├── auth.py         # login / logout
 │   │   └── ui.py           # server-rendered pages
 │   ├── services/
-│   │   ├── detection.py    # R-01 .. R-04 rule engine
+│   │   ├── detection.py    # R-01 .. R-09 rule engine
 │   │   ├── log_analyzer.py # ingestion pipeline
 │   │   ├── log_collector.py# live Linux/Windows collection
 │   │   ├── sample_loader.py# sample log parsers
@@ -233,9 +245,9 @@ Then open `http://127.0.0.1:5000` and log in.
 python -m pytest
 ```
 
-95 tests cover the proposal's test cases TC-01 – TC-08, each of the four
-detection rules individually, all three sample log parsers, and input
-validation.
+236 tests cover the proposal's test cases TC-01 – TC-08, each of the nine
+detection rules individually, all three sample log parsers, USB device
+detection, and input validation.
 
 ## Documentation
 

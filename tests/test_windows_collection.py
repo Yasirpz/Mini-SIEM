@@ -15,6 +15,7 @@ from app.models import (
     Event,
     Host,
     EVT_SUCCESSFUL_LOGIN,
+    EVT_USB_DEVICE_CONNECTED,
     EVT_WIN_FAILED_LOGIN,
     utcnow,
 )
@@ -640,3 +641,123 @@ def test_repeated_collection_does_not_duplicate_events(auth_client, app, monkeyp
     assert second['events_stored'] == 0
     assert second['duplicates_skipped'] == 1
     assert Event.query.filter_by(host_id=host.id).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# Removable media (Event ID 6416)
+# ---------------------------------------------------------------------------
+
+def usb_record(description='SanDisk Cruzer USB Device', user='yasir',
+               vendor_ids=r'USBSTOR\DiskSanDisk_Cruzer_Blade',
+               compatible_ids=r'USBSTOR\Disk',
+               timestamp='2026-08-15 14:20:00'):
+    """
+    Build a 6416 record shaped like the PowerShell collector's output.
+
+    6416 carries no TargetUserName, no logon type and no address — only the
+    device identifiers and the account that was signed in at the time.
+    """
+    return {
+        'Timestamp': timestamp,
+        'EventId': 6416,
+        'SubjectUserName': user,
+        'DeviceDescription': description,
+        'VendorIds': vendor_ids,
+        'CompatibleIds': compatible_ids,
+    }
+
+
+def test_event_6416_becomes_a_usb_device_event():
+    parsed = LogCollector.parse_windows_event(usb_record())
+
+    assert parsed['alert_type'] == EVT_USB_DEVICE_CONNECTED
+    assert parsed['device_name'] == 'SanDisk Cruzer USB Device'
+    assert parsed['user'] == 'yasir'
+
+
+def test_usb_message_names_the_device_and_the_user():
+    parsed = LogCollector.parse_windows_event(
+        usb_record(description='Kingston DataTraveler', user='student')
+    )
+    assert parsed['message'] == "USB device connected: Kingston DataTraveler by user 'student'"
+
+
+def test_a_usb_event_is_recorded_as_a_physical_not_a_network_event():
+    """
+    Plugging a drive in happens at the keyboard. Marking it LOCAL_CONSOLE
+    keeps it out of the brute-force and threat-IP correlations, which only
+    make sense for routable addresses.
+    """
+    parsed = LogCollector.parse_windows_event(usb_record())
+    assert parsed['source_ip'] == 'LOCAL_CONSOLE'
+
+
+def test_a_usb_event_with_no_description_still_names_something():
+    """A device that reports no description must not appear as a blank row."""
+    parsed = LogCollector.parse_windows_event(usb_record(description=''))
+    assert parsed['device_name'] == 'Unknown device'
+    assert 'Unknown device' in parsed['message']
+
+
+def test_a_usb_event_with_no_user_falls_back_to_unknown():
+    parsed = LogCollector.parse_windows_event(usb_record(user=''))
+    assert parsed['user'] == 'UNKNOWN'
+
+
+def test_other_event_types_carry_no_device_name():
+    """device_name belongs to removable media only; everything else leaves it NULL."""
+    assert LogCollector.parse_windows_event(win_record(4625))['device_name'] is None
+    assert LogCollector.parse_windows_event(win_record(4624))['device_name'] is None
+
+
+def test_the_query_requests_device_events(app):
+    cmd = LogCollector.build_windows_query()
+    assert '6416' in cmd
+    assert 'DeviceDescription' in cmd
+
+
+def test_the_query_keeps_only_usb_hardware_ids(app):
+    """
+    6416 fires for the internal disk, keyboard and network card at every boot.
+    Filtering in PowerShell means that flood never crosses the process
+    boundary, exactly as the interactive-logon filter does for 4624.
+    """
+    cmd = LogCollector.build_windows_query()
+    assert "$vendorIds -like '*USB*'" in cmd
+    assert "$compatibleIds -like '*USB*'" in cmd
+
+
+def test_a_usb_event_survives_a_full_collection(app):
+    """The whole path: PowerShell output to normalized event."""
+    client = FakeWinClient([usb_record()])
+    logs = LogCollector.get_windows_logs(client)
+
+    assert len(logs) == 1
+    assert logs[0]['alert_type'] == EVT_USB_DEVICE_CONNECTED
+    assert logs[0]['device_name'] == 'SanDisk Cruzer USB Device'
+
+
+def test_a_usb_event_is_stored_with_its_device_name(app):
+    """The device name must reach the Event row, not stop at the parser."""
+    host = _windows_host()
+    LogAnalyzer.ingest(
+        LogCollector.parse_windows_ndjson(ndjson([usb_record()])),
+        host.id,
+        archive=False,
+    )
+
+    event = Event.query.filter_by(event_type=EVT_USB_DEVICE_CONNECTED).one()
+    assert event.device_name == 'SanDisk Cruzer USB Device'
+    assert event.to_dict()['device_name'] == 'SanDisk Cruzer USB Device'
+
+
+def test_collection_still_works_when_pnp_auditing_is_disabled(app):
+    """
+    A host without Plug and Play auditing simply emits no 6416 records. That
+    must look like "no USB events", never like a collection failure.
+    """
+    client = FakeWinClient([win_record(4625), win_record(4624)])
+    logs = LogCollector.get_windows_logs(client)
+
+    assert len(logs) == 2
+    assert all(log['alert_type'] != EVT_USB_DEVICE_CONNECTED for log in logs)

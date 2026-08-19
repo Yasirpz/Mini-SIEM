@@ -82,6 +82,12 @@ EVT_AUDIT_LOG_CLEARED = 'AUDIT_LOG_CLEARED'          # 1102
 EVT_ACCOUNT_DELETED = 'ACCOUNT_DELETED'              # 4726
 EVT_PROCESS_CREATED = 'PROCESS_CREATED'              # 4688
 
+# Physical activity at the machine itself, rather than over the network.
+# A removable drive is how data leaves an organisation and how malware
+# arrives, so it belongs in the same picture as the network-borne events
+# even though no source address is involved.
+EVT_USB_DEVICE_CONNECTED = 'USB_DEVICE_CONNECTED'    # 6416
+
 # Event types that the detection rules treat as authentication failures.
 # Deliberately unchanged: rule R-01 counts login *attempts*, so a lockout
 # (the result of failures already counted) must not inflate it, and a
@@ -100,6 +106,7 @@ SENSITIVE_EVENT_TYPES = (
     EVT_GROUP_MEMBER_ADDED,
     EVT_PASSWORD_RESET,
     EVT_AUDIT_LOG_CLEARED,
+    EVT_USB_DEVICE_CONNECTED,
 )
 
 
@@ -299,6 +306,12 @@ class Event(db.Model):
     origin = db.Column(db.String(30), default='COLLECTED')
     ingested_at = db.Column(db.DateTime, default=utcnow)
 
+    # Only removable-media events populate this. It is a separate column
+    # rather than something parsed back out of `message`, so the dashboard can
+    # show the device name without re-parsing prose that was written for a
+    # human reader.
+    device_name = db.Column(db.String(200))
+
     alerts = db.relationship(
         'Alert', backref='event', lazy='dynamic', cascade='all, delete-orphan'
     )
@@ -313,6 +326,7 @@ class Event(db.Model):
             'source_ip': self.source_ip,
             'username': self.username,
             'message': self.message,
+            'device_name': self.device_name,
             'origin': self.origin,
         }
 

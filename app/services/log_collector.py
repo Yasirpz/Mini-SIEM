@@ -24,6 +24,7 @@ from app.models import (
     EVT_PASSWORD_RESET,
     EVT_SUCCESSFUL_LOGIN,
     EVT_SUDO_USAGE,
+    EVT_USB_DEVICE_CONNECTED,
     EVT_WIN_FAILED_LOGIN,
 )
 
@@ -49,6 +50,7 @@ WIN_EVENT_TYPES = {
     4732: EVT_GROUP_MEMBER_ADDED,     # member added to a security-enabled local group
     4688: EVT_PROCESS_CREATED,        # a new process was created
     1102: EVT_AUDIT_LOG_CLEARED,      # the audit log was cleared
+    6416: EVT_USB_DEVICE_CONNECTED,   # an external device was recognised
 }
 
 # Human-readable summary per event id, used in the stored message.
@@ -65,12 +67,21 @@ WIN_EVENT_DESCRIPTIONS = {
     4732: 'added to a security group',
     4688: 'process created',
     1102: 'AUDIT LOG CLEARED',
+    6416: 'external device connected',
 }
 
 # Events that describe a person signing in, and therefore need the
 # interactive-logon-type filter to keep service noise out. The rest describe
 # discrete administrative actions that are always worth recording.
 WIN_LOGON_EVENTS = (4624, 4672)
+
+# Plug-and-play auditing (6416) fires for *every* device Windows recognises,
+# including the internal disk, keyboard and network card enumerated at every
+# boot. Only removable storage is interesting here, and a USB device always
+# declares itself in VendorIds or CompatibleIds, so those are matched to
+# separate the handful of real events from the boot-time flood.
+WIN_DEVICE_EVENTS = (6416,)
+WIN_USB_ID_MARKER = 'USB'
 
 # Process creation (4688) fires for *every* process the machine starts, which
 # on a normal desktop is thousands per hour. Collecting it by default would
@@ -219,7 +230,8 @@ class LogCollector:
         Both failed (4625) and successful (4624) logons are requested, but
         successful logons are filtered down to genuine interactive sign-ins
         inside PowerShell — filtering there rather than in Python means the
-        noise never crosses the process boundary.
+        noise never crosses the process boundary. Device events (6416) are
+        narrowed the same way, to the ones whose hardware IDs say USB.
 
         Each record is emitted as its own single-line JSON object (NDJSON)
         rather than one JSON document for the whole batch. `ConvertTo-Json`
@@ -250,6 +262,7 @@ class LogCollector:
 
         logon_types = ','.join(f"'{t}'" for t in WIN_INTERACTIVE_LOGON_TYPES)
         ignored = ','.join(f"'{a}'" for a in WIN_IGNORED_ACCOUNTS)
+        device_ids = ','.join(str(i) for i in WIN_DEVICE_EVENTS)
 
         return (
             "$ErrorActionPreference='Stop'; "
@@ -270,12 +283,19 @@ class LogCollector:
             "   $logonType = [string]$data['LogonType']; "
             "   $account = [string]$data['TargetUserName']; "
             "   if (-not $account) { $account = [string]$data['SubjectUserName'] } "
+            "   $vendorIds = [string]$data['VendorIds']; "
+            "   $compatibleIds = [string]$data['CompatibleIds']; "
             # Sign-in events need the interactive filter to keep service noise
             # out; administrative actions are always kept.
             f"   if ($rec.Id -in @({','.join(str(i) for i in WIN_LOGON_EVENTS)})) {{ "
             f"      $keep = ($logonType -in @({logon_types})) -and "
             f"              ($account -notin @({ignored})) -and "
             "              (-not $account.EndsWith('$')) "
+            # Every device the machine has ever seen is announced here at boot,
+            # so discard anything that is not removable before it is emitted.
+            f"   }} elseif ($rec.Id -in @({device_ids})) {{ "
+            f"      $keep = ($vendorIds -like '*{WIN_USB_ID_MARKER}*') -or "
+            f"              ($compatibleIds -like '*{WIN_USB_ID_MARKER}*') "
             "   } else { $keep = $true } "
             "   if ($keep) { "
             "      [PSCustomObject]@{ "
@@ -283,6 +303,12 @@ class LogCollector:
             "         EventId = $rec.Id; "
             "         TargetUserName = $account; "
             "         SubjectUserName = [string]$data['SubjectUserName']; "
+            # Carried so the dashboard can name the drive that was plugged in;
+            # the hardware IDs travel with it as the evidence for why the
+            # record was kept.
+            "         DeviceDescription = [string]$data['DeviceDescription']; "
+            "         VendorIds = $vendorIds; "
+            "         CompatibleIds = $compatibleIds; "
             # Process name only. CommandLine is deliberately not collected:
             # command lines routinely contain passwords and tokens, and a
             # security tool must not become the place they are archived.
@@ -376,6 +402,13 @@ class LogCollector:
             or (entry.get('SubjectUserName') or '').strip()
             or 'UNKNOWN'
         )
+
+        # A device event has no target account at all — the only person it
+        # names is the one who was signed in when the device appeared, so
+        # SubjectUserName is read directly rather than through the fallback.
+        if alert_type == EVT_USB_DEVICE_CONNECTED:
+            user = (entry.get('SubjectUserName') or '').strip() or 'UNKNOWN'
+
         ip = (entry.get('IpAddress') or '').strip()
         workstation = (entry.get('WorkstationName') or '').strip()
         logon_type = (entry.get('LogonType') or '').strip()
@@ -392,11 +425,21 @@ class LogCollector:
         detail = f" via {descriptor}" if descriptor else ''
         origin = f" from {workstation}" if workstation and workstation != '-' else ''
 
+        device_name = None
+
         if alert_type == EVT_PROCESS_CREATED:
             process = (entry.get('NewProcessName') or '').strip() or 'unknown process'
             parent = (entry.get('ParentProcessName') or '').strip()
             parentage = f" (parent: {parent})" if parent else ''
             message = f"Process started by '{user}': {process}{parentage}"
+        elif alert_type == EVT_USB_DEVICE_CONNECTED:
+            device_name = (entry.get('DeviceDescription') or '').strip() or 'Unknown device'
+            # Plugging a drive in happens at the machine itself, so there is no
+            # remote address to report. LOCAL_CONSOLE is the marker the
+            # detection engine already treats as non-routable, which keeps the
+            # event out of the brute-force and threat-IP correlations.
+            ip = 'LOCAL_CONSOLE'
+            message = f"USB device connected: {device_name} by user '{user}'"
         else:
             message = (
                 f"Windows {outcome} for user '{user}'{detail}{origin} "
@@ -409,6 +452,7 @@ class LogCollector:
             'source_ip': ip,
             'user': user,
             'message': message,
+            'device_name': device_name,
             'raw_log': json.dumps(entry, sort_keys=True),
         }
 
