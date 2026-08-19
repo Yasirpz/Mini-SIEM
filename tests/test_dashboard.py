@@ -3,6 +3,7 @@ TC-07 Dashboard Test (proposal Section 15).
 
 Covers FR-08: the dashboard shows alerts and summary statistics.
 """
+from app.models import EVT_USB_DEVICE_CONNECTED, utcnow
 from app.services.log_analyzer import LogAnalyzer
 from app.services.sample_loader import SampleLoader
 
@@ -49,10 +50,13 @@ def test_rule_breakdown_lists_every_rule(auth_client, host):
 
     data = auth_client.get('/api/stats/rules').get_json()
 
-    # R-01..R-04 detect attacks; R-05..R-08 cover post-compromise activity.
-    assert len(data['labels']) == 8
+    # R-01..R-04 detect attacks, R-05..R-08 cover post-compromise activity,
+    # and R-09 covers removable media. This count is an inventory of the rule
+    # set, so it moves whenever a rule is genuinely added.
+    assert len(data['labels']) == 9
     assert data['labels'][0].startswith('R-01')
     assert data['labels'][7].startswith('R-08')
+    assert data['labels'][8].startswith('R-09')
     assert len(data['counts']) == len(data['labels'])
 
 
@@ -150,3 +154,88 @@ def test_alert_can_be_acknowledged(auth_client, host):
 
     unreviewed = auth_client.get('/api/alerts?acknowledged=false&limit=200').get_json()
     assert all(alert['id'] != alert_id for alert in unreviewed)
+
+
+# ------------------------------------------------- removable media panel (R-09)
+
+def seed_usb(host_id, device='SanDisk Cruzer USB Device', user='yasir'):
+    """Ingest one removable-media event, exactly as the collector produces it."""
+    return LogAnalyzer.ingest(
+        [{
+            'timestamp': utcnow(),
+            'alert_type': EVT_USB_DEVICE_CONNECTED,
+            'source_ip': 'LOCAL_CONSOLE',
+            'user': user,
+            'device_name': device,
+            'message': f"USB device connected: {device} by user '{user}'",
+            'raw_log': '{}',
+        }],
+        host_id,
+        archive=False,
+    )
+
+
+def test_events_can_be_filtered_by_the_usb_event_type(auth_client, host):
+    """The dashboard panel reads the ordinary events endpoint with a filter."""
+    seed(host.id)
+    seed_usb(host.id)
+
+    data = auth_client.get(
+        '/api/events?event_type=USB_DEVICE_CONNECTED&limit=10'
+    ).get_json()
+
+    assert data['total'] == 1
+    assert len(data['events']) == 1
+    assert data['events'][0]['event_type'] == 'USB_DEVICE_CONNECTED'
+
+
+def test_the_usb_filter_returns_the_device_name(auth_client, host):
+    """Host, user, time and device are what the panel renders."""
+    seed_usb(host.id, device='Kingston DataTraveler', user='student')
+
+    event = auth_client.get(
+        '/api/events?event_type=USB_DEVICE_CONNECTED'
+    ).get_json()['events'][0]
+
+    assert event['device_name'] == 'Kingston DataTraveler'
+    assert event['username'] == 'student'
+    assert event['host_name'] == host.hostname
+    assert event['timestamp'] is not None
+
+
+def test_the_usb_filter_excludes_authentication_events(auth_client, host):
+    """A burst of failed logins must not leak into the removable-media panel."""
+    seed(host.id)
+
+    data = auth_client.get(
+        '/api/events?event_type=USB_DEVICE_CONNECTED'
+    ).get_json()
+
+    assert data['total'] == 0
+    assert data['events'] == []
+
+
+def test_the_usb_panel_is_empty_before_any_device_is_seen(auth_client, host):
+    """Zero USB events is the normal state and must not be an error."""
+    response = auth_client.get('/api/events?event_type=USB_DEVICE_CONNECTED&limit=10')
+
+    assert response.status_code == 200
+    assert response.get_json()['total'] == 0
+
+
+def test_ordinary_events_report_no_device_name(auth_client, host):
+    """device_name is always present in the payload, and NULL for non-USB events."""
+    seed(host.id)
+
+    event = auth_client.get('/api/events?limit=1').get_json()['events'][0]
+
+    assert 'device_name' in event
+    assert event['device_name'] is None
+
+
+def test_the_dashboard_page_renders_the_usb_panel(auth_client, host):
+    response = auth_client.get('/')
+
+    assert response.status_code == 200
+    assert b'Recent USB Devices' in response.data
+    assert b'usbBody' in response.data

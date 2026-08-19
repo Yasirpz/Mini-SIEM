@@ -86,6 +86,9 @@ def _add_missing_columns():
             'last_error': 'VARCHAR(500)',
             'last_latency_ms': 'INTEGER',
         },
+        'events': {
+            'device_name': 'VARCHAR(200)',
+        },
     }
 
     inspector = inspect(db.engine)

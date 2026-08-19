@@ -10,6 +10,9 @@ project proposal:
     R-03  Threat IP Match Rule       source IP is BANNED in the registry
     R-04  Multiple Host Attempt Rule same source IP attacking several hosts
 
+Later rules extend the same engine to post-compromise and physical activity,
+up to R-09 (an external storage device connected to a monitored machine).
+
 The engine runs over Event rows that are already stored in the database, so
 rules can be re-applied at any time without re-collecting logs. Every alert is
 anchored to the Event that triggered it, and the engine refuses to create a
@@ -34,6 +37,7 @@ from app.models import (
     EVT_GROUP_MEMBER_ADDED,
     EVT_PASSWORD_RESET,
     EVT_INVALID_USER,
+    EVT_USB_DEVICE_CONNECTED,
     IP_BANNED,
     IP_TRUSTED,
     IP_UNKNOWN,
@@ -113,6 +117,7 @@ class DetectionEngine:
         candidates.extend(DetectionEngine.rule_06_account_created(events))
         candidates.extend(DetectionEngine.rule_07_privilege_change(events))
         candidates.extend(DetectionEngine.rule_08_lockout(events))
+        candidates.extend(DetectionEngine.rule_09_external_device(events))
 
         return DetectionEngine._persist(candidates)
 
@@ -423,6 +428,40 @@ class DetectionEngine:
         ]
 
     # ------------------------------------------------------------------
+    # R-09: an external storage device was connected
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def rule_09_external_device(events):
+        """
+        A USB drive is the route by which data leaves a machine that is
+        otherwise watched only at the network edge, and the route by which
+        malware arrives on one that has no network at all.
+
+        Every connection raises an alert, with no threshold: unlike a failed
+        password there is no innocent background rate to filter out, and the
+        collector has already discarded the internal hardware that Windows
+        enumerates at boot. Severity is medium because plugging in a drive is
+        ordinary behaviour — the alert asks the administrator to confirm it
+        was expected, rather than declaring an attack.
+        """
+        return [
+            RuleResult(
+                rule_id='R-09',
+                event=event,
+                severity=SEVERITY_MEDIUM,
+                alert_type='USB_DEVICE_CONNECTED',
+                message=(
+                    f"External device '{event.device_name or 'unknown device'}' "
+                    f"was connected by '{event.username or 'unknown'}'. "
+                    f"Confirm the removable media was authorised."
+                ),
+            )
+            for event in events
+            if event.event_type == EVT_USB_DEVICE_CONNECTED
+        ]
+
+    # ------------------------------------------------------------------
     # Threat Intelligence registry upkeep
     # ------------------------------------------------------------------
 
@@ -484,6 +523,7 @@ class DetectionEngine:
         counts = {
             'R-01': 0, 'R-02': 0, 'R-03': 0, 'R-04': 0,
             'R-05': 0, 'R-06': 0, 'R-07': 0, 'R-08': 0,
+            'R-09': 0,
         }
 
         if not candidates:

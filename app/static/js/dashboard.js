@@ -8,13 +8,14 @@ import {
 import {
     fetchHosts, checkHostStatus, triggerLogFetch, fetchAlerts,
     fetchSummary, fetchSeverityStats, fetchRuleStats, fetchTimeline, fetchTopSources,
-    fetchHostStats,
+    fetchHostStats, fetchEvents,
 } from './api.js';
 
 const hostsContainer = document.getElementById('hostsContainer');
 const alertsBody = document.getElementById('alertsBody');
 const topSources = document.getElementById('topSources');
 const hostOverviewBody = document.getElementById('hostOverviewBody');
+const usbBody = document.getElementById('usbBody');
 
 // Chart instances are kept so a refresh updates them instead of stacking
 // a new canvas overlay on top of the old one.
@@ -46,6 +47,7 @@ async function loadAll() {
         refreshHostOverview(),
         refreshHostsList(),
         refreshAlertsTable(),
+        refreshUsbDevices(),
     ]);
 }
 
@@ -229,6 +231,42 @@ async function refreshTopSources() {
     }
 }
 
+// ======================= REMOVABLE MEDIA =======================
+
+/**
+ * Recent USB connections, read from the ordinary events endpoint with an
+ * event_type filter. A dedicated API route would duplicate logic that
+ * /api/events already performs, so none is added.
+ */
+async function refreshUsbDevices() {
+    if (!usbBody) return;
+    clearContainer(usbBody);
+
+    try {
+        const data = await fetchEvents({ event_type: 'USB_DEVICE_CONNECTED', limit: 10 });
+
+        if (data.events.length === 0) {
+            // Absence of USB events is the normal state, and also what a host
+            // without Plug and Play auditing looks like — so the empty message
+            // points at the setting rather than implying something is broken.
+            emptyRow(usbBody, 4,
+                'No USB devices recorded. Enable Plug and Play auditing on a monitored host to collect these.');
+            return;
+        }
+
+        data.events.forEach((event) => {
+            const row = createEl('tr', [], '', usbBody);
+
+            createEl('td', ['text-nowrap', 'small'], formatTime(event.timestamp), row);
+            createEl('td', ['small'], event.host_name, row);
+            createEl('td', ['small'], event.username || '-', row);
+            createEl('td', ['small', 'fw-semibold'], event.device_name || 'Unknown device', row);
+        });
+    } catch (err) {
+        emptyRow(usbBody, 4, `Could not load USB devices: ${err.message}`);
+    }
+}
+
 // ======================= HOST STATUS =======================
 
 async function refreshHostsList() {
@@ -332,7 +370,10 @@ async function handleFetchLogs(host, btn) {
             alertCount > 0 ? 'warning' : 'success',
         );
 
-        await Promise.allSettled([refreshStats(), refreshCharts(), refreshAlertsTable(), refreshTopSources()]);
+        await Promise.allSettled([
+            refreshStats(), refreshCharts(), refreshAlertsTable(),
+            refreshTopSources(), refreshUsbDevices(),
+        ]);
     } catch (err) {
         notify(`Log collection failed for ${host.hostname}: ${err.message}`, 'danger');
     } finally {

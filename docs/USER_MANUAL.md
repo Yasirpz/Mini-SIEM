@@ -44,9 +44,38 @@ environment right now?"
   invalid-user and Windows logon-failure events. A spike identifies the day
   an attack occurred.
 - **Alerts by Severity** — the `LOW` / `MEDIUM` / `HIGH` split.
-- **Alerts by Detection Rule** — which of R-01 … R-04 is firing.
+- **Alerts by Detection Rule** — which of R-01 … R-09 is firing.
 - **Top Attacking Source IPs** — the busiest sources, with their registry
   status, so you can decide what to ban.
+
+### Recent USB Devices
+
+The ten most recent removable storage devices connected to a monitored
+Windows host, newest first:
+
+| Column | Meaning |
+|---|---|
+| **Time** | When Windows recognised the device, in your local time zone. |
+| **Host** | The monitored machine the device was plugged into. |
+| **User** | The account that was signed in at the time. |
+| **Device** | The device's own description, e.g. *SanDisk Cruzer Blade USB Device*. |
+
+Each connection also raises a `MEDIUM` alert under rule **R-09**, so it
+appears in the Alerts page alongside everything else and can be acknowledged
+once you have confirmed the drive was authorised.
+
+This panel depends on **Plug and Play auditing** being enabled on the
+monitored machine, which is off by default in Windows. Run this in an
+Administrator PowerShell on the machine you want to watch:
+
+```bash
+auditpol /set /subcategory:"Plug and Play Events" /success:enable
+```
+
+Until then the panel stays empty and says so — collection of every other
+event type carries on as normal. Only removable devices are listed: the
+internal disk, keyboard and network card that Windows also announces at boot
+are filtered out during collection.
 
 ### Monitored Hosts
 
@@ -96,6 +125,12 @@ Filter by host, event type or source IP. Each row shows the timestamp, host,
 normalized event type, source IP, username, message and origin
 (`COLLECTED`, `IMPORTED` or `SYNTHETIC`).
 
+The event-type list includes a **Removable media** group holding
+*USB device connected (6416)*, which shows exactly the events behind the
+dashboard's USB panel. These carry `LOCAL_CONSOLE` as their source IP,
+because plugging in a drive happens at the machine itself rather than over
+the network.
+
 **Clear events** deletes stored events and their alerts so a demonstration
 can be repeated from a clean state. Archived Parquet files on disk are
 deliberately **not** deleted — that is the forensic retention guarantee.
@@ -113,7 +148,7 @@ Narrow by **severity**, **rule**, **host** and **review status**, then press
 
 ### Re-run detection
 
-Re-applies all four rules to events already in the database, without
+Re-applies all nine rules to events already in the database, without
 re-collecting anything. Use it after changing an IP's registry status. The
 engine is idempotent — existing alerts are never duplicated.
 

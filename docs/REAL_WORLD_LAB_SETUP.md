@@ -104,6 +104,25 @@ If it reports "No Auditing", enable it (Administrator PowerShell):
 auditpol /set /subcategory:"Logon" /success:enable /failure:enable
 ```
 
+To detect USB storage devices (rule R-09), Windows must also audit Plug and
+Play events. This is off by default on every edition. To check:
+
+```bash
+auditpol /get /subcategory:"Plug and Play Events"
+```
+
+If it reports "No Auditing", enable it (Administrator PowerShell):
+
+```bash
+auditpol /set /subcategory:"Plug and Play Events" /success:enable
+```
+
+Only `/success` is needed: Event 6416 records a device that Windows *did*
+recognise, so there is no failure case to audit. Plug a USB drive in
+afterwards and collect again — the device appears in the **Recent USB
+Devices** panel on the dashboard. Devices already attached when auditing was
+enabled are not re-reported until they are unplugged and reconnected.
+
 ---
 
 ## 4. Remote Windows monitoring (WinRM)
@@ -124,6 +143,12 @@ Enable logon auditing there too:
 
 ```bash
 auditpol /set /subcategory:"Logon" /success:enable /failure:enable
+```
+
+And Plug and Play auditing, if you want USB detection on this host:
+
+```bash
+auditpol /set /subcategory:"Plug and Play Events" /success:enable
 ```
 
 Find its IP address:
@@ -359,6 +384,8 @@ re-collected."
 | TrustedHosts error | Target not domain-joined | `Set-Item WSMan:\localhost\Client\TrustedHosts -Value '<ip>' -Force` |
 | "No new log entries" | Genuinely nothing new since last collection | Generate a failed sign-in, then collect again |
 | Collection returns 0 events | Logon auditing disabled | `auditpol /set /subcategory:"Logon" /success:enable /failure:enable` |
+| USB panel stays empty, other events arrive | Plug and Play auditing disabled | `auditpol /set /subcategory:"Plug and Play Events" /success:enable` |
+| USB panel empty after enabling auditing | The drive was already plugged in | Unplug it and reconnect, then collect again |
 | Host shows 🔴 offline | Last attempt failed | Hover the badge, or read *Last error* on the host row |
 | Login rejected | Wrong copy of the project | Confirm you started Flask from `Desktop\Mini-SIEM` |
 

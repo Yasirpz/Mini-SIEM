@@ -146,9 +146,15 @@ function showImportResult(result) {
 
     const rules = createEl('div', ['small', 'mt-1'], '', box);
     createEl('span', ['fw-bold'], 'Alerts raised — ', rules);
-    ['R-01', 'R-02', 'R-03', 'R-04'].forEach((rule) => {
-        createEl('span', ['me-2'], `${rule}: ${counts[rule] || 0}`, rules);
-    });
+    // Read the rule ids back off the response rather than listing them here,
+    // so adding a rule to the engine does not silently drop it from this
+    // summary. 'total' is a roll-up, not a rule, so it is excluded.
+    Object.keys(counts)
+        .filter((key) => key !== 'total')
+        .sort()
+        .forEach((rule) => {
+            createEl('span', ['me-2'], `${rule}: ${counts[rule] || 0}`, rules);
+        });
 
     if (counts['R-03'] === 0) {
         createEl('div', ['small', 'mt-2', 'fst-italic'],
@@ -314,8 +320,8 @@ function render(events) {
 }
 
 /**
- * Badge styling per event type: failures amber, successful logons green, so
- * a mixed Windows collection is readable at a glance.
+ * Badge styling per event type: failures amber, successful logons green,
+ * removable media cyan, so a mixed Windows collection is readable at a glance.
  */
 function eventTypeClasses(eventType) {
     switch (eventType) {
@@ -336,6 +342,10 @@ function eventTypeClasses(eventType) {
         case 'EXPLICIT_CREDENTIALS':
         case 'ACCOUNT_ENABLED':
             return ['bg-primary'];
+        // Physical rather than network activity, so it gets its own colour
+        // instead of sharing one with the logon events around it.
+        case 'USB_DEVICE_CONNECTED':
+            return ['bg-info', 'text-dark'];
         default:
             return ['bg-secondary'];
     }

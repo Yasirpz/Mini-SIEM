@@ -81,7 +81,9 @@ class LogAnalyzer:
 
         Collectors fetch by time window, so the same log line can legitimately
         arrive twice. Events are therefore de-duplicated on the natural key
-        (host, timestamp, type, source IP, username).
+        (host, timestamp, type, source IP, username). The device name is
+        deliberately not part of that key: it is descriptive detail carried
+        alongside an event, not something that makes two records distinct.
 
         Returns (stored_count, duplicates_skipped).
         """
@@ -113,6 +115,9 @@ class LogAnalyzer:
                     username=username,
                     message=_clean(raw.get('message')),
                     raw_log=_clean(raw.get('raw_log')),
+                    # Only removable-media events supply this; every other
+                    # source leaves the column NULL.
+                    device_name=_clean(raw.get('device_name')),
                     origin=origin,
                     ingested_at=utcnow(),
                 )

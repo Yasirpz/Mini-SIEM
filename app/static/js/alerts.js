@@ -151,9 +151,16 @@ async function handleRerun(event) {
     try {
         const result = await runDetection(null);
         const counts = result.alerts;
+        // Built from whatever rules the engine actually reported, so a new
+        // rule appears here automatically instead of being left out of the
+        // summary until someone remembers to update this line.
+        const breakdown = Object.keys(counts)
+            .filter((key) => key !== 'total')
+            .sort()
+            .map((rule) => `${rule}: ${counts[rule]}`)
+            .join(', ');
         notify(
-            `${result.message} (R-01: ${counts['R-01']}, R-02: ${counts['R-02']}, ` +
-            `R-03: ${counts['R-03']}, R-04: ${counts['R-04']})`,
+            `${result.message} (${breakdown})`,
             counts.total > 0 ? 'warning' : 'info',
         );
         offset = 0;

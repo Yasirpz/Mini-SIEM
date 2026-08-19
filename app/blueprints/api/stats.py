@@ -38,6 +38,7 @@ RULE_NAMES = {
     'R-06': 'Account Created/Deleted',
     'R-07': 'Privilege Change',
     'R-08': 'Account Lockout',
+    'R-09': 'External Device Connected',
 }
 
 

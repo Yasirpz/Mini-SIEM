@@ -320,3 +320,126 @@ def test_alerts_carry_every_required_field(app, host, banned_ip, base_time):
     assert alert.rule_id is not None
     assert alert.message
     assert alert.acknowledged is False
+
+
+# ================================================================ R-09
+# External Device Connected Rule.
+
+def make_usb_event(host_id, when, device='SanDisk Cruzer USB Device', user='yasir'):
+    """Insert a removable-media event, as the Windows collector would store it."""
+    event = Event(
+        host_id=host_id,
+        timestamp=when,
+        event_type='USB_DEVICE_CONNECTED',
+        # Plugging a drive in is physical, so it carries the console marker
+        # rather than a routable address.
+        source_ip='LOCAL_CONSOLE',
+        username=user,
+        device_name=device,
+        message=f"USB device connected: {device} by user '{user}'",
+        origin='TEST',
+    )
+    db.session.add(event)
+    return event
+
+
+def test_r09_fires_on_a_connected_device(app, host, base_time):
+    make_usb_event(host.id, base_time)
+    db.session.commit()
+
+    counts = DetectionEngine.run()
+
+    assert counts['R-09'] == 1
+    alert = Alert.query.filter_by(rule_id='R-09').one()
+    assert alert.severity == 'MEDIUM'
+    assert alert.alert_type == 'USB_DEVICE_CONNECTED'
+
+
+def test_r09_names_the_device_and_the_user(app, host, base_time):
+    make_usb_event(host.id, base_time, device='Kingston DataTraveler', user='student')
+    db.session.commit()
+    DetectionEngine.run()
+
+    alert = Alert.query.filter_by(rule_id='R-09').one()
+    assert 'Kingston DataTraveler' in alert.message
+    assert 'student' in alert.message
+
+
+def test_r09_fires_once_per_device_event(app, host, base_time):
+    """There is no threshold: every connection is one alert, and only one."""
+    for index in range(3):
+        make_usb_event(host.id, base_time + timedelta(minutes=index))
+    db.session.commit()
+
+    counts = DetectionEngine.run()
+    assert counts['R-09'] == 3
+
+
+def test_r09_does_not_duplicate_on_a_second_run(app, host, base_time):
+    """Re-running detection must not flood the dashboard with repeats."""
+    make_usb_event(host.id, base_time)
+    db.session.commit()
+
+    first = DetectionEngine.run()
+    second = DetectionEngine.run()
+
+    assert first['R-09'] == 1
+    assert second['R-09'] == 0
+    assert Alert.query.filter_by(rule_id='R-09').count() == 1
+
+
+def test_r09_is_suppressed_for_a_trusted_source(app, host, base_time):
+    """
+    Trusting a source silences it for every rule, R-09 included. A lab machine
+    whose console is marked TRUSTED should not report its own devices.
+    """
+    db.session.add(IPRegistry(ip_address='LOCAL_CONSOLE', status='TRUSTED'))
+    make_usb_event(host.id, base_time)
+    db.session.commit()
+
+    counts = DetectionEngine.run()
+    assert counts['R-09'] == 0
+    assert Alert.query.filter_by(rule_id='R-09').count() == 0
+
+
+def test_r09_ignores_every_other_event_type(app, host, base_time):
+    """Ordinary authentication activity must never be reported as a device."""
+    for index in range(6):
+        make_event(host.id, base_time + timedelta(seconds=30 * index))
+    db.session.commit()
+
+    counts = DetectionEngine.run()
+    assert counts['R-09'] == 0
+
+
+def test_a_device_event_does_not_feed_the_brute_force_rule(app, host, base_time):
+    """A USB connection is not an authentication attempt and must not count as one."""
+    for index in range(8):
+        make_usb_event(host.id, base_time + timedelta(seconds=30 * index))
+    db.session.commit()
+
+    counts = DetectionEngine.run()
+    assert counts['R-01'] == 0
+    assert counts['R-04'] == 0
+
+
+def test_a_device_event_does_not_pollute_the_threat_registry(app, host, base_time):
+    """LOCAL_CONSOLE is a marker, not an address worth tracking as a threat."""
+    make_usb_event(host.id, base_time)
+    db.session.commit()
+
+    DetectionEngine.run()
+    assert IPRegistry.query.filter_by(ip_address='LOCAL_CONSOLE').count() == 0
+
+
+def test_r09_survives_an_event_with_no_device_name(app, host, base_time):
+    """
+    A row stored before the device_name column existed leaves it NULL. The
+    rule must still describe the event rather than raise.
+    """
+    make_usb_event(host.id, base_time, device=None)
+    db.session.commit()
+
+    counts = DetectionEngine.run()
+    assert counts['R-09'] == 1
+    assert 'unknown device' in Alert.query.filter_by(rule_id='R-09').one().message
