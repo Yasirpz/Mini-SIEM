@@ -264,6 +264,11 @@ def fetch_logs(host_id):
                 ),
             )
 
+        # Same best-effort refresh as the local path. A remote probe crosses
+        # the network and so has more ways to fail, which makes it all the
+        # more important that it cannot cost the operator their logs.
+        host.usb_audit_status = _probe_usb_auditing(win) or host.usb_audit_status
+
         try:
             logs = LogCollector.get_windows_logs(win, last_fetch_time=log_source.last_fetch)
         except PowerShellError as exc:
@@ -305,7 +310,9 @@ def fetch_logs(host_id):
                 # and it must never be able to fail a collection that would
                 # otherwise have succeeded. Losing the badge is a far smaller
                 # problem than losing the logs.
-                host.usb_audit_status = _probe_usb_auditing(win)
+                host.usb_audit_status = (
+                    _probe_usb_auditing(win) or host.usb_audit_status
+                )
 
                 logs = LogCollector.get_windows_logs(win, last_fetch_time=log_source.last_fetch)
         except PowerShellError as exc:
@@ -447,6 +454,18 @@ def test_connection(host_id):
                 if readable:
                     add('Authentication successful', True, 'The account was accepted.')
                     add('Security log accessible', True, detail)
+
+                    # Only worth asking once the account has been accepted —
+                    # probing first would just report the authentication
+                    # failure a second time under a misleading name.
+                    audit_state, audit_detail = win.pnp_audit_status()
+                    host.usb_audit_status = audit_state or host.usb_audit_status
+                    add(
+                        'USB device auditing enabled',
+                        audit_state == USB_AUDIT_ENABLED,
+                        audit_detail,
+                        advisory=True,
+                    )
                 elif 'denied' in detail.lower() or 'credential' in detail.lower():
                     add('Authentication successful', False, detail)
                 else:

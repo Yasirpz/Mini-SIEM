@@ -14,7 +14,8 @@ from app.models import (
     COLLECT_WINRM,
     Host,
 )
-from app.services.win_client import PowerShellError, RemoteWinClient
+from app.models import USB_AUDIT_DISABLED, USB_AUDIT_ENABLED, USB_AUDIT_UNKNOWN
+from app.services.win_client import PowerShellError, RemoteWinClient, WinClient
 from app.validators import ValidationError, validate_collection_method
 
 
@@ -284,3 +285,123 @@ def test_a_linux_host_still_uses_ssh(auth_client, app, monkeypatch):
 
     assert called['host'] == 'Lab-Server'
     assert response.status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# Plug and Play auditing on a remote host
+# ---------------------------------------------------------------------------
+
+AUDIT_ENABLED_ROW = '  Plug and Play Events                    Success'
+AUDIT_DISABLED_ROW = '  Plug and Play Events                    No Auditing'
+
+
+def _audit_client(stdout, stderr='', returncode=0, capture=None):
+    """A RemoteWinClient whose remote call returns canned auditpol output."""
+
+    class Client(RemoteWinClient):
+        def run_ps_raw(self, cmd, timeout=120):
+            if capture is not None:
+                capture['cmd'] = self._wrap(cmd)
+                capture['timeout'] = timeout
+            return stdout, stderr, returncode
+
+    return Client(computer='10.0.0.5', username='admin', password='secret')
+
+
+def test_the_audit_probe_runs_on_the_remote_machine():
+    """
+    The inherited probe must be wrapped for the target, not run locally —
+    otherwise the badge would report this server's policy for every host.
+    """
+    capture = {}
+    _audit_client(AUDIT_ENABLED_ROW, capture=capture).pnp_audit_status()
+
+    assert 'Invoke-Command' in capture['cmd']
+    assert 'auditpol.exe' in capture['cmd']
+    assert '10.0.0.5' in capture['cmd']
+
+
+def test_the_remote_probe_gets_a_longer_timeout():
+    """The same command has to cross the network, so it is given more time."""
+    capture = {}
+    _audit_client(AUDIT_ENABLED_ROW, capture=capture).pnp_audit_status()
+
+    assert capture['timeout'] == RemoteWinClient.AUDIT_PROBE_TIMEOUT
+    assert RemoteWinClient.AUDIT_PROBE_TIMEOUT > WinClient.AUDIT_PROBE_TIMEOUT
+
+
+def test_a_remote_host_with_auditing_on_is_enabled():
+    state, _ = _audit_client(AUDIT_ENABLED_ROW).pnp_audit_status()
+    assert state == USB_AUDIT_ENABLED
+
+
+def test_a_remote_host_with_auditing_off_is_disabled():
+    state, detail = _audit_client(AUDIT_DISABLED_ROW).pnp_audit_status()
+
+    assert state == USB_AUDIT_DISABLED
+    assert 'No Auditing' in detail
+
+
+def test_a_remote_winrm_failure_names_the_machine_to_fix():
+    """
+    A bare WinRM error does not say which host is broken. The remote override
+    exists to add that, exactly as the Security-log probe already does.
+    """
+    state, detail = _audit_client('', 'WinRM cannot complete the operation.').pnp_audit_status()
+
+    assert state == USB_AUDIT_UNKNOWN
+    assert 'Enable-PSRemoting' in detail
+    assert '10.0.0.5' in detail
+
+
+def test_a_rejected_remote_account_is_unknown_not_disabled():
+    """
+    Being unable to ask is not the same as being told "off". Reporting a
+    credential problem as DISABLED would send the operator to run auditpol on
+    a host whose policy might already be correct.
+    """
+    state, detail = _audit_client('', 'Access is denied.').pnp_audit_status()
+
+    assert state == USB_AUDIT_UNKNOWN
+    assert 'local Administrator' in detail
+
+
+def test_the_password_never_appears_in_the_audit_probe():
+    """The credential must stay in the environment, as it does for collection."""
+    capture = {}
+
+    class Client(RemoteWinClient):
+        def run_ps_raw(self, cmd, timeout=120):
+            capture['cmd'] = self._wrap(cmd)
+            return AUDIT_ENABLED_ROW, '', 0
+
+    Client(computer='10.0.0.5', username='admin',
+           password='SuperSecretPassw0rd').pnp_audit_status()
+
+    assert 'SuperSecretPassw0rd' not in capture['cmd']
+    assert 'MINISIEM_REMOTE_PASSWORD' in capture['cmd']
+
+
+def test_a_failed_remote_probe_leaves_the_recorded_state_alone(app):
+    """
+    A probe that cannot answer must not overwrite a known value with a guess.
+    A host previously seen as ENABLED should not silently become unknown just
+    because the network blipped during one collection.
+    """
+    from app.blueprints.api.hosts import _probe_usb_auditing
+
+    host = Host(
+        hostname='Abdul-Fatah-PC', ip_address='10.0.0.5', os_type='WINDOWS',
+        collection_method=COLLECT_WINRM, remote_user='admin',
+        usb_audit_status=USB_AUDIT_ENABLED,
+    )
+    db.session.add(host)
+    db.session.commit()
+
+    class Broken:
+        def pnp_audit_status(self):
+            raise PowerShellError('network went away')
+
+    host.usb_audit_status = _probe_usb_auditing(Broken()) or host.usb_audit_status
+
+    assert host.usb_audit_status == USB_AUDIT_ENABLED
