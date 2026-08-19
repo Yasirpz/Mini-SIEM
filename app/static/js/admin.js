@@ -183,8 +183,11 @@ function renderTestResult(host, result) {
     const list = createEl('ul', ['mb-0', 'ps-3'], '', box);
     result.checks.forEach((check) => {
         const item = createEl('li', ['small'], '', list);
-        createEl('span', ['fw-semibold', 'me-1'],
-            `${check.ok ? '✓' : '✗'} ${check.name}`, item);
+        // An advisory check reports an optional capability and never counts
+        // towards the verdict, so it must not be marked with a failure cross
+        // beside a banner that correctly says everything passed.
+        const mark = check.advisory ? (check.ok ? '✓' : 'ⓘ') : (check.ok ? '✓' : '✗');
+        createEl('span', ['fw-semibold', 'me-1'], `${mark} ${check.name}`, item);
         if (check.detail) {
             createEl('span', ['text-muted'], `— ${check.detail}`, item);
         }

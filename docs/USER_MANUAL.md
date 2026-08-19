@@ -77,6 +77,25 @@ event type carries on as normal. Only removable devices are listed: the
 internal disk, keyboard and network card that Windows also announces at boot
 are filtered out during collection.
 
+### Monitored Hosts overview
+
+The table lists every monitored machine. The **USB audit** column reports
+whether that host is capable of reporting removable media at all:
+
+| Badge | Meaning |
+|---|---|
+| **on** | Plug and Play auditing is enabled — USB devices will be recorded. |
+| **off** | Auditing is off. The host will never report a USB device until it is enabled. |
+| **?** | Not probed yet, or the audit policy could not be read (usually because Flask is not elevated). |
+
+This exists because an empty USB panel is otherwise ambiguous — it could mean
+nothing was plugged in, or that the host would never have told you either
+way. Hover the badge for the exact reason and the command to fix it.
+
+The value is refreshed whenever you press **Status**/**Test** or **Collect**
+on a host, rather than on every dashboard load, so a refresh never pays for a
+policy lookup per host.
+
 ### Monitored Hosts
 
 Each host row offers two actions:

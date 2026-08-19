@@ -27,6 +27,9 @@ from app.models import (
     HOST_ONLINE,
     HOST_UNKNOWN,
     Host,
+    USB_AUDIT_DISABLED,
+    USB_AUDIT_ENABLED,
+    USB_AUDIT_UNKNOWN,
     utcnow,
 )
 from app.services.log_analyzer import LogAnalyzer
@@ -292,3 +295,154 @@ def test_command_lines_are_never_collected(app):
     """
     cmd = LogCollector.build_windows_query()
     assert 'CommandLine' not in cmd
+
+
+# ---------------------------------------------------------------------------
+# Plug and Play auditing status (USB detection readiness)
+# ---------------------------------------------------------------------------
+
+# Verbatim auditpol output, so the parser is tested against the real shape of
+# the command's table rather than an idealised version of it.
+AUDITPOL_DISABLED = """System audit policy
+Category/Subcategory                      Setting
+Detailed Tracking
+  Plug and Play Events                    No Auditing
+"""
+
+AUDITPOL_ENABLED = """System audit policy
+Category/Subcategory                      Setting
+Detailed Tracking
+  Plug and Play Events                    Success
+"""
+
+AUDITPOL_DENIED = """Error 0x00000522 occurred:
+A required privilege is not held by the client.
+"""
+
+
+def test_audit_output_reporting_no_auditing_is_disabled():
+    from app.services.win_client import _classify_audit_output
+
+    state, detail = _classify_audit_output(AUDITPOL_DISABLED, '')
+
+    assert state == USB_AUDIT_DISABLED
+    assert 'No Auditing' in detail
+
+
+def test_audit_output_reporting_success_is_enabled():
+    from app.services.win_client import _classify_audit_output
+
+    state, _ = _classify_audit_output(AUDITPOL_ENABLED, '')
+    assert state == USB_AUDIT_ENABLED
+
+
+def test_a_privilege_error_is_unknown_not_disabled():
+    """
+    An unprivileged probe cannot see the policy at all. Reporting that as
+    DISABLED would send the operator to fix the wrong thing — they would run
+    auditpol, find it already correct, and stop trusting the badge.
+    """
+    from app.services.win_client import _classify_audit_output
+
+    state, detail = _classify_audit_output(AUDITPOL_DENIED, '')
+
+    assert state == USB_AUDIT_UNKNOWN
+    assert 'privilege' in detail.lower()
+    # The reason must survive as one line, fit for a table cell and a VARCHAR.
+    assert '\n' not in detail
+
+
+def test_empty_audit_output_is_unknown():
+    from app.services.win_client import _classify_audit_output
+
+    state, _ = _classify_audit_output('', '')
+    assert state == USB_AUDIT_UNKNOWN
+
+
+def test_audit_error_on_stderr_is_still_recognised():
+    """auditpol writes its privilege failure to either stream."""
+    from app.services.win_client import _classify_audit_output
+
+    state, detail = _classify_audit_output('', AUDITPOL_DENIED)
+
+    assert state == USB_AUDIT_UNKNOWN
+    assert '\n' not in detail
+
+
+def test_a_host_defaults_to_unknown_auditing(app):
+    """A host nobody has probed must not claim to know its own audit policy."""
+    host = _host()
+
+    assert host.usb_audit_status is None
+    assert host.to_dict()['usb_audit_status'] == USB_AUDIT_UNKNOWN
+
+
+def test_the_host_stats_endpoint_reports_audit_status(auth_client, app):
+    """The dashboard host overview reads this straight from /api/stats/hosts."""
+    host = _host()
+    host.usb_audit_status = USB_AUDIT_ENABLED
+    db.session.commit()
+
+    rows = auth_client.get('/api/stats/hosts').get_json()
+
+    assert rows[0]['usb_audit_status'] == USB_AUDIT_ENABLED
+
+
+def test_host_stats_reports_unknown_for_an_unprobed_host(auth_client, app):
+    _host()
+
+    rows = auth_client.get('/api/stats/hosts').get_json()
+    assert rows[0]['usb_audit_status'] == USB_AUDIT_UNKNOWN
+
+
+def test_the_local_test_reports_usb_auditing_as_advisory(auth_client, app):
+    """
+    USB detection is optional. The check is reported, but a host with the
+    auditing off still collects logs correctly and must not be called broken.
+    """
+    host = _host(collection_method=COLLECT_LOCAL)
+
+    payload = auth_client.post(f'/api/hosts/{host.id}/test').get_json()
+
+    usb = [check for check in payload['checks'] if 'USB' in check['name']]
+    assert len(usb) == 1
+    assert usb[0]['advisory'] is True
+
+
+def test_required_checks_are_still_marked_non_advisory(auth_client, app):
+    """Prerequisites must keep deciding the verdict."""
+    host = _host(collection_method=COLLECT_LOCAL)
+
+    payload = auth_client.post(f'/api/hosts/{host.id}/test').get_json()
+
+    required = [c for c in payload['checks'] if not c['advisory']]
+    assert any('Security log' in c['name'] for c in required)
+    assert all(c['advisory'] is False for c in required)
+
+
+def test_a_probe_failure_cannot_break_collection(app):
+    """
+    The audit probe is a diagnostic. A client that cannot answer must cost
+    the badge, never the logs.
+    """
+    from app.blueprints.api.hosts import _probe_usb_auditing
+
+    class NoProbe:
+        pass
+
+    class ExplodingProbe:
+        def pnp_audit_status(self):
+            raise RuntimeError('powershell exploded')
+
+    assert _probe_usb_auditing(NoProbe()) is None
+    assert _probe_usb_auditing(ExplodingProbe()) is None
+
+
+def test_a_successful_probe_returns_the_state(app):
+    from app.blueprints.api.hosts import _probe_usb_auditing
+
+    class WorkingProbe:
+        def pnp_audit_status(self):
+            return USB_AUDIT_ENABLED, 'Plug and Play Events: Success.'
+
+    assert _probe_usb_auditing(WorkingProbe()) == USB_AUDIT_ENABLED

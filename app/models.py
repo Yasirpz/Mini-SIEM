@@ -54,6 +54,17 @@ HOST_STATUSES = (HOST_ONLINE, HOST_DEGRADED, HOST_OFFLINE, HOST_UNKNOWN)
 # even if nothing has failed since — silence is not the same as health.
 HOST_STALE_AFTER_MINUTES = 60
 
+# Whether a host is actually capable of reporting USB devices, which depends
+# on Plug and Play auditing being switched on there (it is off by default).
+# Without this the "Recent USB Devices" panel is ambiguous: an empty panel
+# could mean nothing was plugged in, or that the host would never have told
+# us either way. Recording the difference is the same reasoning that makes an
+# uncontacted host UNKNOWN rather than optimistically ONLINE.
+USB_AUDIT_ENABLED = 'ENABLED'      # auditpol reports Success for the subcategory
+USB_AUDIT_DISABLED = 'DISABLED'    # explicitly "No Auditing"
+USB_AUDIT_UNKNOWN = 'UNKNOWN'      # never probed, or the probe itself failed
+USB_AUDIT_STATES = (USB_AUDIT_ENABLED, USB_AUDIT_DISABLED, USB_AUDIT_UNKNOWN)
+
 # Threat Intelligence registry statuses.
 IP_UNKNOWN = 'UNKNOWN'
 IP_TRUSTED = 'TRUSTED'
@@ -156,6 +167,12 @@ class Host(db.Model):
     last_error = db.Column(db.String(500))
     last_latency_ms = db.Column(db.Integer)
 
+    # Last observed Plug and Play auditing state on this host. Stored rather
+    # than probed on every dashboard load, because running auditpol per host
+    # on each refresh would make the page pay for information that changes
+    # only when someone deliberately alters the audit policy.
+    usb_audit_status = db.Column(db.String(20))
+
     log_sources = db.relationship(
         'LogSource', backref='host', lazy='dynamic', cascade='all, delete-orphan'
     )
@@ -237,6 +254,7 @@ class Host(db.Model):
             'last_success': _fmt(self.last_success),
             'last_error': self.last_error,
             'last_latency_ms': self.last_latency_ms,
+            'usb_audit_status': self.usb_audit_status or USB_AUDIT_UNKNOWN,
         }
 
 

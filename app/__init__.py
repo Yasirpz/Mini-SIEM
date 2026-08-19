@@ -85,6 +85,7 @@ def _add_missing_columns():
             'last_success': 'DATETIME',
             'last_error': 'VARCHAR(500)',
             'last_latency_ms': 'INTEGER',
+            'usb_audit_status': 'VARCHAR(20)',
         },
         'events': {
             'device_name': 'VARCHAR(200)',
