@@ -154,6 +154,11 @@ class WinClient:
     # Plug and Play auditing (required for USB detection)
     # ------------------------------------------------------------------
 
+    # Reading the audit policy is a single fast command locally, but the same
+    # probe has to cross the network on a remote host, so the subclass widens
+    # this rather than sharing one compromise value.
+    AUDIT_PROBE_TIMEOUT = 60
+
     def pnp_audit_status(self):
         """
         Report whether this machine audits Plug and Play events.
@@ -173,7 +178,7 @@ class WinClient:
         )
 
         try:
-            stdout, stderr, _ = self.run_ps_raw(probe, timeout=60)
+            stdout, stderr, _ = self.run_ps_raw(probe, timeout=self.AUDIT_PROBE_TIMEOUT)
         except PowerShellError as exc:
             return USB_AUDIT_UNKNOWN, str(exc)
 
@@ -309,6 +314,24 @@ class RemoteWinClient(WinClient):
             return False, f'No response from {self.computer}.'
 
         return False, _explain_winrm_failure(text.replace('ERROR: ', '', 1), self.computer)
+
+    AUDIT_PROBE_TIMEOUT = 90
+
+    def pnp_audit_status(self):
+        """
+        Read the remote machine's Plug and Play audit policy.
+
+        The inherited probe already runs on the target, because run_ps_raw
+        wraps every script in Invoke-Command. Only the failure text needs
+        specialising: a bare WinRM error tells the operator nothing about
+        which machine to go and fix.
+        """
+        state, detail = super().pnp_audit_status()
+
+        if state == USB_AUDIT_UNKNOWN:
+            detail = _explain_winrm_failure(detail, self.computer)
+
+        return state, detail
 
     @staticmethod
     def is_elevated():

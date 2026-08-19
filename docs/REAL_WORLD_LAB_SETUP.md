@@ -151,6 +151,10 @@ And Plug and Play auditing, if you want USB detection on this host:
 auditpol /set /subcategory:"Plug and Play Events" /success:enable
 ```
 
+The dashboard reports whether this succeeded: the **USB audit** column in the
+Monitored Hosts table reads the policy from the remote machine itself, so you
+can confirm the setting took effect without signing back in to it.
+
 Find its IP address:
 
 ```bash

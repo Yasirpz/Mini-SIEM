@@ -446,3 +446,71 @@ def test_a_successful_probe_returns_the_state(app):
             return USB_AUDIT_ENABLED, 'Plug and Play Events: Success.'
 
     assert _probe_usb_auditing(WorkingProbe()) == USB_AUDIT_ENABLED
+
+
+def test_a_winrm_test_reports_usb_auditing_when_the_account_works(auth_client, app, monkeypatch):
+    """
+    Remote hosts get the same advisory check as local ones, so the dashboard
+    badge is meaningful for every Windows host rather than only the console.
+    """
+    import app.blueprints.api.hosts as hosts_module
+
+    host = _host(
+        hostname='Abdul-Fatah-PC', ip_address='10.0.0.5',
+        collection_method=COLLECT_WINRM, remote_user='admin',
+    )
+
+    class WorkingRemote:
+        username = 'admin'
+
+        def security_log_status(self):
+            return True, 'READABLE'
+
+        def pnp_audit_status(self):
+            return USB_AUDIT_ENABLED, 'Plug and Play Events: Success.'
+
+    monkeypatch.setattr(hosts_module, '_port_is_open', lambda *a, **k: True)
+    monkeypatch.setattr(hosts_module, '_winrm_for', lambda h: WorkingRemote())
+
+    payload = auth_client.post(f'/api/hosts/{host.id}/test').get_json()
+
+    usb = [c for c in payload['checks'] if 'USB' in c['name']]
+    assert len(usb) == 1
+    assert usb[0]['advisory'] is True
+    assert usb[0]['ok'] is True
+    assert payload['ok'] is True
+
+    db.session.refresh(host)
+    assert host.usb_audit_status == USB_AUDIT_ENABLED
+
+
+def test_auditing_off_on_a_remote_host_does_not_fail_the_test(auth_client, app, monkeypatch):
+    """A remote host that collects logs fine must not be called broken."""
+    import app.blueprints.api.hosts as hosts_module
+
+    host = _host(
+        hostname='Abdul-Fatah-PC', ip_address='10.0.0.5',
+        collection_method=COLLECT_WINRM, remote_user='admin',
+    )
+
+    class NoAuditing:
+        username = 'admin'
+
+        def security_log_status(self):
+            return True, 'READABLE'
+
+        def pnp_audit_status(self):
+            return USB_AUDIT_DISABLED, 'Plug and Play Events: No Auditing.'
+
+    monkeypatch.setattr(hosts_module, '_port_is_open', lambda *a, **k: True)
+    monkeypatch.setattr(hosts_module, '_winrm_for', lambda h: NoAuditing())
+
+    payload = auth_client.post(f'/api/hosts/{host.id}/test').get_json()
+
+    usb = [c for c in payload['checks'] if 'USB' in c['name']][0]
+    assert usb['ok'] is False        # reported honestly
+    assert usb['advisory'] is True
+    assert payload['ok'] is True     # but the host is not broken
+
+    db.session.refresh(host)
+    assert host.usb_audit_status == USB_AUDIT_DISABLED

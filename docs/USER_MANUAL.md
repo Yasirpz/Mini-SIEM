@@ -96,6 +96,12 @@ The value is refreshed whenever you press **Status**/**Test** or **Collect**
 on a host, rather than on every dashboard load, so a refresh never pays for a
 policy lookup per host.
 
+Both locally monitored machines and remote hosts collected over WinRM are
+covered — the policy is read on the target itself, so the badge reports that
+host's setting rather than this server's. A remote host is only asked once
+its account has been accepted, and a connection problem shows as **?** with
+the machine named, never as **off**.
+
 ### Monitored Hosts
 
 Each host row offers two actions:
