@@ -386,9 +386,14 @@ async function handleFetchLogs(host, btn) {
             alertCount > 0 ? 'warning' : 'success',
         );
 
+        // The host overview is included because a collection updates the
+        // host's own row — its event and alert counts, when it was last
+        // collected, and the USB auditing state the collection just probed.
+        // Leaving it out meant pressing Collect refreshed everything except
+        // the table describing the host you had just collected from.
         await Promise.allSettled([
             refreshStats(), refreshCharts(), refreshAlertsTable(),
-            refreshTopSources(), refreshUsbDevices(),
+            refreshTopSources(), refreshUsbDevices(), refreshHostOverview(),
         ]);
     } catch (err) {
         notify(`Log collection failed for ${host.hostname}: ${err.message}`, 'danger');
