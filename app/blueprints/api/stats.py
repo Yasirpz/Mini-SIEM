@@ -26,6 +26,7 @@ from app.models import (
     IP_BANNED,
     SEVERITIES,
     SEVERITY_HIGH,
+    USB_AUDIT_UNKNOWN,
     utcnow,
 )
 
@@ -89,6 +90,10 @@ def stats_hosts():
             'collection_method': host.effective_collection_method(),
             'events': host.events.count(),
             'alerts': host.alerts.count(),
+            # Whether this host can report USB devices at all. Read from the
+            # last probe rather than measured here, so a dashboard refresh
+            # never pays for a per-host auditpol call.
+            'usb_audit_status': host.usb_audit_status or USB_AUDIT_UNKNOWN,
             'last_success': host.last_success.strftime('%Y-%m-%d %H:%M:%S')
             if host.last_success else None,
         }

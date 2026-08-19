@@ -11,7 +11,14 @@ from flask_login import login_required
 
 from app.blueprints.api import api_bp
 from app.extensions import db
-from app.models import COLLECT_LOCAL, COLLECT_SSH, COLLECT_WINRM, Host, LogSource
+from app.models import (
+    COLLECT_LOCAL,
+    COLLECT_SSH,
+    COLLECT_WINRM,
+    Host,
+    LogSource,
+    USB_AUDIT_ENABLED,
+)
 from app.services.log_analyzer import LogAnalyzer
 from app.services.log_collector import LogCollector
 from app.services.remote_client import RemoteClient
@@ -289,6 +296,17 @@ def fetch_logs(host_id):
                         ),
                     )
 
+                # Refresh the recorded auditing state on the way past. Most
+                # operators press Collect far more often than Test, so tying
+                # this only to the connection test would leave the dashboard
+                # showing UNKNOWN indefinitely.
+                #
+                # Deliberately best-effort: this is an optional diagnostic,
+                # and it must never be able to fail a collection that would
+                # otherwise have succeeded. Losing the badge is a far smaller
+                # problem than losing the logs.
+                host.usb_audit_status = _probe_usb_auditing(win)
+
                 logs = LogCollector.get_windows_logs(win, last_fetch_time=log_source.last_fetch)
         except PowerShellError as exc:
             return fail(
@@ -361,8 +379,16 @@ def test_connection(host_id):
 
     checks = []
 
-    def add(name, ok, detail=''):
-        checks.append({'name': name, 'ok': ok, 'detail': detail})
+    def add(name, ok, detail='', advisory=False):
+        """
+        Record one stage of the test.
+
+        An advisory check reports an optional capability rather than a
+        prerequisite. It is shown to the operator but deliberately excluded
+        from the overall verdict, so a host that collects logs perfectly well
+        is not reported as broken merely because an optional feature is off.
+        """
+        checks.append({'name': name, 'ok': ok, 'detail': detail, 'advisory': advisory})
         return ok
 
     log.info('Testing connection to %s via %s', host.hostname, method)
@@ -381,6 +407,17 @@ def test_connection(host_id):
 
         readable, detail = WinClient().security_log_status()
         add('Security log is readable', readable, detail)
+
+        # USB detection is optional, so this is advisory: a host with Plug and
+        # Play auditing off still collects everything else correctly.
+        audit_state, audit_detail = WinClient().pnp_audit_status()
+        host.usb_audit_status = audit_state or host.usb_audit_status
+        add(
+            'USB device auditing enabled',
+            audit_state == USB_AUDIT_ENABLED,
+            audit_detail,
+            advisory=True,
+        )
 
     elif method == COLLECT_WINRM:
         port = current_app.config.get('WINRM_PORT') or 5985
@@ -446,9 +483,10 @@ def test_connection(host_id):
                 add('Authentication successful', False, str(exc))
 
     latency = int((time.monotonic() - started) * 1000)
-    ok = all(check['ok'] for check in checks) and bool(checks)
+    required = [check for check in checks if not check['advisory']]
+    ok = all(check['ok'] for check in required) and bool(required)
 
-    failure = next((c for c in checks if not c['ok']), None)
+    failure = next((c for c in required if not c['ok']), None)
     host.record_attempt(
         ok,
         error=None if ok else f"{failure['name']}: {failure['detail']}",
@@ -463,6 +501,26 @@ def test_connection(host_id):
         'status': host.health(),
         'collection_method': method,
     }), 200
+
+
+def _probe_usb_auditing(win):
+    """
+    Best-effort read of a host's Plug and Play auditing state.
+
+    Returns None when the state cannot be determined, which leaves whatever
+    was previously recorded in place rather than overwriting a known value
+    with a guess.
+    """
+    probe = getattr(win, 'pnp_audit_status', None)
+    if probe is None:
+        return None
+
+    try:
+        state, _ = probe()
+        return state
+    except Exception:
+        log.warning('Could not read the Plug and Play audit policy', exc_info=True)
+        return None
 
 
 def _port_is_open(address, port, timeout=3):

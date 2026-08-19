@@ -65,11 +65,20 @@ async function refreshHostOverview() {
         UNKNOWN: ['bg-secondary', '⚪ unknown'],
     };
 
+    // Whether the host can report USB devices at all. DISABLED and UNKNOWN
+    // are shown differently on purpose: the first is one command away from
+    // being fixed, the second usually means the probe could not run.
+    const usbAuditStyles = {
+        ENABLED: ['bg-success', 'on', 'Plug and Play auditing is enabled — USB devices will be recorded.'],
+        DISABLED: ['bg-secondary', 'off', 'Plug and Play auditing is off. Run: auditpol /set /subcategory:"Plug and Play Events" /success:enable'],
+        UNKNOWN: ['bg-light text-dark border', '?', 'Not probed yet, or the audit policy could not be read. Use Status or Collect on this host.'],
+    };
+
     try {
         const hosts = await fetchHostStats();
 
         if (hosts.length === 0) {
-            emptyRow(hostOverviewBody, 7, 'No hosts configured yet.');
+            emptyRow(hostOverviewBody, 8, 'No hosts configured yet.');
             return;
         }
 
@@ -83,13 +92,20 @@ async function refreshHostOverview() {
             createEl('td', ['fw-semibold'], host.hostname, row);
             createEl('td', ['small'], host.os_type || '-', row);
             createEl('td', ['small', 'text-muted'], host.collection_method, row);
+
+            const usbCell = createEl('td', [], '', row);
+            const [usbCls, usbLabel, usbTitle] =
+                usbAuditStyles[host.usb_audit_status] || usbAuditStyles.UNKNOWN;
+            const usbBadge = createEl('span', ['badge', ...usbCls.split(' ')], usbLabel, usbCell);
+            usbBadge.title = usbTitle;
+
             createEl('td', ['text-end'], String(host.events), row);
             createEl('td', ['text-end'], String(host.alerts), row);
             createEl('td', ['small', 'text-muted'],
                 host.last_success ? formatTime(host.last_success) : 'never', row);
         });
     } catch (err) {
-        emptyRow(hostOverviewBody, 7, 'Could not load host status.');
+        emptyRow(hostOverviewBody, 8, 'Could not load host status.');
     }
 }
 

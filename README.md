@@ -46,6 +46,8 @@ ideas: log collection, normalization, correlation, and alerting.
 - **USB device detection** — spots removable storage plugged into a monitored
   Windows host (Event ID 6416) and reports the host, device, user and time.
   Internal hardware enumerated at boot is filtered out during collection.
+  The Monitored Hosts table also shows whether each host actually *audits*
+  Plug and Play events, so an empty USB panel is never ambiguous.
 - **Rule-based detection engine** — nine rules (R-01 … R-09) with `LOW` /
   `MEDIUM` / `HIGH` severities, re-runnable at any time over stored events.
 - **Dashboard** — summary statistics, Chart.js charts (failure trend,

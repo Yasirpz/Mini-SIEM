@@ -12,9 +12,16 @@ otherwise indistinguishable from "there were no events".
 import ctypes
 import subprocess
 
+from app.models import USB_AUDIT_DISABLED, USB_AUDIT_ENABLED, USB_AUDIT_UNKNOWN
+
 # Get-WinEvent says this when the filter matched nothing. It exits non-zero
 # and writes to stderr, but it is a normal empty result, not a failure.
 NO_EVENTS_MARKER = 'No events were found'
+
+# The audit subcategory that has to be switched on before Windows will record
+# a connected device as Event 6416. Named here so the probe, the API and the
+# documentation cannot drift apart.
+PNP_AUDIT_SUBCATEGORY = 'Plug and Play Events'
 
 
 class PowerShellError(RuntimeError):
@@ -142,6 +149,35 @@ class WinClient:
         """Backwards-compatible boolean form of security_log_status()."""
         ok, _ = self.security_log_status()
         return ok
+
+    # ------------------------------------------------------------------
+    # Plug and Play auditing (required for USB detection)
+    # ------------------------------------------------------------------
+
+    def pnp_audit_status(self):
+        """
+        Report whether this machine audits Plug and Play events.
+
+        Returns (state, detail) where state is one of the USB_AUDIT_* values.
+        The distinction between DISABLED and UNKNOWN matters: "switched off"
+        is something the operator can fix with one command, whereas "we could
+        not tell" usually means the process is not elevated. Reporting both as
+        a bare False would send them looking for the wrong problem.
+
+        Reading the audit policy needs an elevated token, exactly as reading
+        the Security log does, so an unprivileged probe yields UNKNOWN rather
+        than a misleading DISABLED.
+        """
+        probe = (
+            f'& auditpol.exe "/get" "/subcategory:{PNP_AUDIT_SUBCATEGORY}"'
+        )
+
+        try:
+            stdout, stderr, _ = self.run_ps_raw(probe, timeout=60)
+        except PowerShellError as exc:
+            return USB_AUDIT_UNKNOWN, str(exc)
+
+        return _classify_audit_output(stdout, stderr)
 
     def get_logs_json(self, log_name, limit=10):
         """Fetch a Windows event log as JSON (kept for ad-hoc inspection)."""
@@ -278,6 +314,51 @@ class RemoteWinClient(WinClient):
     def is_elevated():
         """Local elevation is irrelevant when querying another machine."""
         return True
+
+
+def _one_line(text):
+    """Collapse multi-line command output into a single readable line."""
+    return ' '.join(part.strip() for part in (text or '').split()) or ''
+
+
+def _classify_audit_output(stdout, stderr):
+    """
+    Turn auditpol's tabular output into a USB_AUDIT_* state.
+
+    auditpol prints a table whose last column is the setting, e.g.
+        Plug and Play Events                    No Auditing
+    and writes an "Error 0x00000522" line instead when the caller lacks the
+    privilege to read the policy at all.
+    """
+    text = (stdout or '').strip()
+    problem = (stderr or '').strip()
+
+    # auditpol splits its privilege error across two lines and may put it on
+    # either stream. Flatten it so the reason fits a table cell and a
+    # VARCHAR column rather than arriving with embedded newlines.
+    if not text:
+        return USB_AUDIT_UNKNOWN, _one_line(problem) or 'auditpol produced no output.'
+
+    # A privilege failure is reported on stdout by auditpol, not stderr, so it
+    # has to be recognised here rather than inferred from the exit code.
+    if 'required privilege' in text.lower() or 'error 0x' in text.lower():
+        return USB_AUDIT_UNKNOWN, _one_line(text)
+
+    for line in text.splitlines():
+        if PNP_AUDIT_SUBCATEGORY.lower() not in line.lower():
+            continue
+
+        setting = line.lower().split(PNP_AUDIT_SUBCATEGORY.lower(), 1)[1].strip()
+        if 'no auditing' in setting:
+            return USB_AUDIT_DISABLED, (
+                f'{PNP_AUDIT_SUBCATEGORY}: No Auditing. USB devices will not be '
+                f'recorded until this is enabled.'
+            )
+        if 'success' in setting:
+            return USB_AUDIT_ENABLED, f'{PNP_AUDIT_SUBCATEGORY}: {setting.title()}.'
+        return USB_AUDIT_UNKNOWN, f'Unrecognised audit setting: {setting!r}'
+
+    return USB_AUDIT_UNKNOWN, f'Could not find "{PNP_AUDIT_SUBCATEGORY}" in the audit policy.'
 
 
 def _ps_quote(value):
