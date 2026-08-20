@@ -6,6 +6,8 @@ import {
     fetchHosts, createHost, updateHost, removeHost, triggerLogFetch,
     testHostConnection, fetchIPs, createIP, updateIP, removeIP,
     fetchSchedulerStatus, runSchedulerNow,
+    fetchWatchedPaths, createWatchedPath, removeWatchedPath,
+    runIntegrityScan, resetBaseline,
 } from './api.js';
 
 const hostsContainer = document.getElementById('hostsListAdmin');
@@ -15,6 +17,9 @@ const ipForm = document.getElementById('ipForm');
 
 let hostModal = null;
 let ipModal = null;
+let fimModal = null;
+// The host whose watched paths the integrity dialog is currently showing.
+let fimHost = null;
 
 export async function initAdmin() {
     const hostModalEl = document.getElementById('editHostModal');
@@ -23,10 +28,18 @@ export async function initAdmin() {
     const ipModalEl = document.getElementById('editIPModal');
     if (ipModalEl) ipModal = new bootstrap.Modal(ipModalEl);
 
+    const fimModalEl = document.getElementById('fileIntegrityModal');
+    if (fimModalEl) fimModal = new bootstrap.Modal(fimModalEl);
+
     if (hostForm) hostForm.addEventListener('submit', handleAddHost);
     if (ipForm) ipForm.addEventListener('submit', handleAddIP);
 
     bindClick('saveHostBtn', handleSaveHost);
+    bindClick('scanNowBtn', handleScanNow);
+    bindClick('resetBaselineBtn', handleResetBaseline);
+
+    const watchForm = document.getElementById('watchedPathForm');
+    if (watchForm) watchForm.addEventListener('submit', handleAddWatchedPath);
     bindClick('saveIPBtn', handleSaveIP);
     bindClick('refreshHostsBtn', refreshHosts);
     bindClick('refreshIPsBtn', refreshIPs);
@@ -115,6 +128,7 @@ function renderHostRow(host) {
         `${host.event_count} events · ${host.alert_count} alerts`, info);
 
     renderPollingControl(host, info);
+    renderIntegritySummary(host, info);
 
     const btnGroup = createEl('div', ['btn-group', 'btn-group-sm', 'flex-shrink-0'], '', item);
 
@@ -129,6 +143,10 @@ function renderHostRow(host) {
     const testBtn = createEl('button', ['btn', 'btn-outline-primary'], 'Test', btnGroup);
     testBtn.title = 'Check reachability, authentication and log access separately';
     testBtn.addEventListener('click', () => handleTestConnection(host, testBtn));
+
+    const filesBtn = createEl('button', ['btn', 'btn-outline-secondary'], 'Files', btnGroup);
+    filesBtn.title = 'Watch files on this host for tampering (File Integrity Monitoring)';
+    filesBtn.addEventListener('click', () => openIntegrityModal(host));
 
     const editBtn = createEl('button', ['btn', 'btn-outline-secondary'], 'Edit', btnGroup);
     editBtn.addEventListener('click', () => openHostModal(host));
@@ -273,6 +291,210 @@ async function handleRunSchedulerNow(button) {
     } finally {
         button.disabled = false;
         button.textContent = original;
+    }
+}
+
+/**
+ * A one-line summary of file integrity monitoring for a host.
+ *
+ * Deliberately terse. The detail belongs in the dialog; what the row has to
+ * answer is whether anything is being watched at all, because a host with
+ * monitoring switched on but no watched paths is the failure mode that looks
+ * like success.
+ */
+function renderIntegritySummary(host, parent) {
+    const line = createEl('div', ['small', 'text-muted', 'mt-1'], '', parent);
+
+    if (!host.fim_enabled) {
+        createEl('span', [], 'file integrity off', line);
+        return;
+    }
+
+    if (!host.watched_path_count) {
+        const warn = createEl('span', ['text-warning-emphasis'],
+            'file integrity on, but no paths are being watched', line);
+        warn.title = 'Nothing will be checked until a path is added.';
+        return;
+    }
+
+    const parts = [
+        `${host.watched_path_count} path(s) watched`,
+        `${host.baseline_file_count} file(s) baselined`,
+    ];
+    if (host.last_integrity_scan) parts.push(`scanned ${formatTime(host.last_integrity_scan)}`);
+    createEl('span', [], parts.join(' \u00b7 '), line);
+
+    if (host.last_integrity_error) {
+        const err = createEl('div', ['small', 'text-danger', 'text-truncate'],
+            `Last scan error: ${host.last_integrity_error}`, parent);
+        err.style.maxWidth = '460px';
+    }
+}
+
+/** Open the file-integrity dialog for one host. */
+async function openIntegrityModal(host) {
+    fimHost = host;
+    document.getElementById('fimHostName').textContent = host.hostname;
+
+    const toggle = document.getElementById('fimEnabledToggle');
+    toggle.checked = !!host.fim_enabled;
+    toggle.onchange = async () => {
+        try {
+            const updated = await updateHost(host.id, { fim_enabled: toggle.checked });
+            Object.assign(host, updated);
+            notify(
+                host.fim_enabled
+                    ? `File integrity monitoring is on for "${host.hostname}".`
+                    : `File integrity monitoring is off for "${host.hostname}".`,
+                'info',
+            );
+            await refreshHosts();
+        } catch (err) {
+            notify(err.message, 'danger');
+            toggle.checked = !!host.fim_enabled;
+        }
+    };
+
+    await refreshWatchedPaths();
+    fimModal.show();
+}
+
+async function refreshWatchedPaths() {
+    const body = document.getElementById('watchedPathList');
+    if (!body || !fimHost) return;
+    clearContainer(body);
+
+    try {
+        const paths = await fetchWatchedPaths(fimHost.id);
+
+        if (paths.length === 0) {
+            createEl('div', ['list-group-item', 'text-muted', 'small'],
+                'No paths watched yet. Add one below — a configuration file, a startup folder, or a directory that should never change.',
+                body);
+            return;
+        }
+
+        paths.forEach((entry) => {
+            const row = createEl('div',
+                ['list-group-item', 'd-flex', 'justify-content-between', 'align-items-center', 'gap-2'],
+                '', body);
+
+            const info = createEl('div', ['overflow-hidden'], '', row);
+            createEl('div', ['font-monospace', 'small', 'text-truncate'], entry.path, info);
+
+            const facts = [`${entry.file_count} file(s) baselined`];
+            if (entry.recursive) facts.push('recursive');
+            if (entry.description) facts.push(entry.description);
+            createEl('div', ['small', 'text-muted', 'text-truncate'], facts.join(' \u00b7 '), info);
+
+            const del = createEl('button',
+                ['btn', 'btn-sm', 'btn-outline-danger', 'flex-shrink-0'], 'Remove', row);
+            del.addEventListener('click', async () => {
+                if (!window.confirm(
+                    `Stop watching "${entry.path}"? Its ${entry.file_count} recorded ` +
+                    'hash(es) are deleted too, so watching it again starts a fresh baseline.'
+                )) {
+                    return;
+                }
+                try {
+                    await removeWatchedPath(entry.id);
+                    notify(`Stopped watching ${entry.path}.`, 'info');
+                    await refreshWatchedPaths();
+                    await refreshHosts();
+                } catch (err) {
+                    notify(err.message, 'danger');
+                }
+            });
+        });
+    } catch (err) {
+        createEl('div', ['list-group-item', 'text-danger', 'small'],
+            `Could not load watched paths: ${err.message}`, body);
+    }
+}
+
+async function handleAddWatchedPath(event) {
+    event.preventDefault();
+    if (!fimHost) return;
+
+    const pathInput = document.getElementById('watchedPathValue');
+    const data = {
+        path: pathInput.value,
+        recursive: document.getElementById('watchedPathRecursive').checked,
+        description: document.getElementById('watchedPathDesc').value,
+    };
+
+    try {
+        await createWatchedPath(fimHost.id, data);
+        notify(`Now watching ${data.path}.`, 'success');
+        event.target.reset();
+        await refreshWatchedPaths();
+        await refreshHosts();
+    } catch (err) {
+        notify(err.message, 'danger');
+    }
+}
+
+async function handleScanNow() {
+    if (!fimHost) return;
+    const button = document.getElementById('scanNowBtn');
+    button.disabled = true;
+    const original = button.textContent;
+    button.textContent = 'Scanning...';
+
+    try {
+        const result = await runIntegrityScan(fimHost.id);
+        const changes = (result.changes || []).length;
+        notify(result.message, changes ? 'warning' : 'success');
+        renderScanResult(result);
+        await refreshWatchedPaths();
+        await refreshHosts();
+    } catch (err) {
+        notify(err.message, 'danger');
+    } finally {
+        button.disabled = false;
+        button.textContent = original;
+    }
+}
+
+/** Show what the last scan found, inside the dialog. */
+function renderScanResult(result) {
+    const box = document.getElementById('scanResult');
+    if (!box) return;
+    clearContainer(box);
+
+    createEl('div', ['small', 'fw-semibold'], result.message, box);
+
+    (result.truncated || []).forEach((path) => {
+        createEl('div', ['small', 'text-warning-emphasis'],
+            `Only the first files under ${path} were checked — narrow the path or turn off recursion.`,
+            box);
+    });
+
+    (result.changes || []).forEach((change) => {
+        const cls = change.event_type === 'FILE_ADDED' ? 'text-warning-emphasis' : 'text-danger';
+        createEl('div', ['small', 'font-monospace', 'text-truncate', cls],
+            `${change.event_type}: ${change.path}`, box);
+    });
+}
+
+async function handleResetBaseline() {
+    if (!fimHost) return;
+    if (!window.confirm(
+        `Clear the recorded hashes for "${fimHost.hostname}"?\n\n` +
+        'Do this only after a change you know about, such as a software update. ' +
+        'The next scan records a fresh baseline and reports nothing.'
+    )) {
+        return;
+    }
+
+    try {
+        const result = await resetBaseline(fimHost.id);
+        notify(result.message, 'info');
+        clearContainer(document.getElementById('scanResult'));
+        await refreshWatchedPaths();
+        await refreshHosts();
+    } catch (err) {
+        notify(err.message, 'danger');
     }
 }
 

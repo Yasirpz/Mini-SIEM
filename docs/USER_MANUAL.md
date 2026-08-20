@@ -235,6 +235,57 @@ Notes worth knowing:
 - The whole feature can be switched off with `SCHEDULER_ENABLED=false` in
   `.env`.
 
+### File Integrity Monitoring
+
+Every other rule in Mini-SIEM reads a log. None of them can tell you that a
+file quietly changed — and editing a startup script or replacing a program is
+how an intruder stays on a machine after the sign-in that let them in has
+scrolled out of the log.
+
+Press **Files** on a host row to open the dialog.
+
+| Control | What it does |
+|---|---|
+| **Watch this path** | Adds a file or folder on that host to be checked. Paths are on the *monitored* machine, not on the Mini-SIEM machine. |
+| **Include subfolders** | Walks the whole tree instead of just the top level. Off by default — a recursive watch on a system folder is how you ask a host to hash tens of thousands of files. |
+| **Scan now** | Hashes everything watched and reports what changed. |
+| **Reset baseline** | Throws away the recorded hashes so the next scan starts fresh. |
+| The switch at the top | Whether scans also run automatically, on the same schedule as log collection. |
+
+**The first scan never reports anything.** It records what every watched file
+looks like now — that is the baseline — and says so. Changes are reported from
+the second scan onwards. This is deliberate: without it, watching a folder of
+four hundred files would produce four hundred alerts the moment you switched
+it on.
+
+After that, three things are reported, and they appear in the **File Integrity
+Changes** panel on the dashboard and as R-10 alerts:
+
+| Finding | Meaning | Severity |
+|---|---|---|
+| **modified** | The file's contents changed. | `HIGH` |
+| **deleted** | A file that was there has gone. | `HIGH` |
+| **appeared** | A file exists that was not there before. | `MEDIUM` |
+
+Good things to watch are files that should never change on their own: the
+Windows `hosts` file, a Startup folder, a web root, a configuration directory.
+Watching a folder full of logs or temporary files will report a change every
+single scan and teach you to ignore the panel.
+
+> **After a software update**, use **Reset baseline**. An update legitimately
+> rewrites many files at once, and without a reset your only options would be
+> to acknowledge every alert or stop watching the path. It is deliberately
+> manual — a system that quietly re-baselined after reporting a change would
+> erase the evidence it exists to keep.
+
+Two limits worth knowing: each watched path checks at most 500 files per scan
+(you are told when that cap is reached), and files larger than 64 MB are
+tracked by size and modification date rather than hashed.
+
+Note that a change tells you a file was altered, never *who* altered it —
+hashing proves the bytes changed and nothing more. Correlate against the sign-in
+events around the same time on the Events page.
+
 ### Threat Intelligence Registry
 
 Maintains the addresses the detection engine knows about.

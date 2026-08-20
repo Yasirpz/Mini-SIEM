@@ -402,6 +402,53 @@ than waiting for the interval.
 > Note that automatic collection lives in the Flask process. Closing the
 > server stops it; it is not installed as a Windows service.
 
+### Part H — file integrity (R-10)
+
+This is the rule that catches what happens *after* a break-in, and it demos
+well because you can cause the change yourself in one line.
+
+27. **Configuration** → **Files** on your local host.
+28. Watch a file you can safely edit — make one first if you prefer:
+
+    ```bash
+    echo original > C:\lab\watched.txt
+    ```
+
+    Add `C:\lab` as the watched path, or the file itself.
+29. **Scan now.** It reports *"Baseline recorded for N file(s)"* and finds
+    nothing. Point this out — it is the correct behaviour, not a failure.
+30. Now change the file:
+
+    ```bash
+    echo tampered >> C:\lab\watched.txt
+    ```
+
+31. **Scan now** again. The dialog names the file as `FILE_MODIFIED`.
+32. **Dashboard** → the **File Integrity Changes** panel lists it.
+33. **Alerts** → one `R-10` **HIGH** alert naming the file.
+
+**Say:** "Every other rule in this system reads a log. Windows will happily
+tell me who signed in, but nothing in any log says that a file changed — so an
+intruder who edits a startup script leaves no trace the other nine rules could
+find. This hashes the file with SHA-256 and compares it to a stored baseline.
+The hash changed, so the bytes changed, whatever the modification date claims —
+and modification dates can be forged, which is exactly why the comparison is on
+the hash."
+
+Two follow-ups worth having ready, because they are the obvious questions:
+
+- *"What about a legitimate update?"* — **Reset baseline**. It is manual on
+  purpose: a system that re-baselined by itself after reporting a change would
+  destroy the evidence it exists to keep.
+- *"Does it tell you who changed the file?"* — No, and it does not claim to.
+  Hashing proves the contents changed and nothing else. The user is recorded
+  as `UNKNOWN` rather than guessed at; correlating with the sign-in events
+  around that timestamp is the analyst's job.
+
+> If you enabled auto-collect in Part G, integrity scans run on the same
+> schedule — so you can leave the dashboard open, edit the file, and let the
+> alert arrive on its own.
+
 ---
 
 ## 8. Troubleshooting
@@ -421,6 +468,10 @@ than waiting for the interval.
 | Dashboard badge says "manual" | No host has auto-collect switched on | Turn the switch on for a host on the Configuration page |
 | Scheduler panel says "not running" | `SCHEDULER_ENABLED=false`, or the server was not restarted | Set it to `true` in `.env` and restart Flask |
 | Automatic collection never fires | Interval not yet elapsed | Press **Run now**, or lower the interval |
+| First integrity scan reports nothing | Correct — it is recording the baseline | Change a watched file, then scan again |
+| Integrity scan finds 0 files | Path does not exist on the *monitored* host | Check the path is on the target machine, not the Mini-SIEM machine |
+| Integrity panel reports changes every scan | Watching logs or temp files that change by themselves | Watch files that should never change on their own |
+| "Only the first files were checked" | The 500-file cap was reached | Narrow the path, or turn off "include subfolders" |
 
 ---
 

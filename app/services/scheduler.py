@@ -61,6 +61,8 @@ class CollectionScheduler:
         self.ticks = 0
         self.collections = 0
         self.failures = 0
+        self.integrity_scans = 0
+        self.integrity_changes = 0
 
     # -- lifecycle ------------------------------------------------------
 
@@ -159,6 +161,12 @@ class CollectionScheduler:
                         'Automatic collection from %s: %s',
                         host.hostname, payload.get('message'),
                     )
+                    # File integrity runs on the same schedule as log
+                    # collection, and only after it, so a host that cannot be
+                    # reached is not asked to hash anything. It is a separate
+                    # step rather than part of collect_host because a host may
+                    # reasonably want one without the other.
+                    self._scan_integrity(host)
                 else:
                     self.failures += 1
                     log.warning(
@@ -167,6 +175,44 @@ class CollectionScheduler:
                     )
 
         return collected
+
+    def _scan_integrity(self, host):
+        """
+        Run a file integrity scan for a host that has asked for one.
+
+        Deliberately best-effort. An integrity scan is an addition to log
+        collection, never a precondition for it, so a scan that fails must
+        cost the operator nothing more than the scan itself -- the logs are
+        already stored by the time this runs.
+        """
+        if not host.fim_enabled:
+            return
+
+        from app.extensions import db
+        from app.services.file_integrity import scan_host
+
+        try:
+            payload, status = scan_host(host)
+        except Exception:
+            log.exception('Automatic integrity scan raised for %s', host.hostname)
+            db.session.rollback()
+            return
+
+        if status == 200:
+            self.integrity_scans += 1
+            changes = len(payload.get('changes') or [])
+            if changes:
+                self.integrity_changes += changes
+                log.warning(
+                    'Integrity scan of %s found %s change(s)', host.hostname, changes
+                )
+            else:
+                log.info('Integrity scan of %s: %s', host.hostname, payload.get('message'))
+        else:
+            log.warning(
+                'Integrity scan of %s failed (%s): %s',
+                host.hostname, status, payload.get('error'),
+            )
 
     # -- reporting ------------------------------------------------------
 
@@ -189,6 +235,9 @@ class CollectionScheduler:
                 'ticks': self.ticks,
                 'collections': self.collections,
                 'failures': self.failures,
+                'integrity_scans': self.integrity_scans,
+                'integrity_changes': self.integrity_changes,
+                'hosts_integrity_watched': Host.query.filter_by(fim_enabled=True).count(),
                 'hosts_polled': len(polled),
                 'next_poll': _fmt(next_due),
                 'hosts': [
@@ -198,6 +247,7 @@ class CollectionScheduler:
                         'interval_seconds': h.effective_poll_interval(),
                         'last_poll': _fmt(h.last_poll),
                         'next_poll': _fmt(h.next_poll_at()),
+                        'fim_enabled': bool(h.fim_enabled),
                     }
                     for h in polled
                 ],

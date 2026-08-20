@@ -52,7 +52,11 @@ ideas: log collection, normalization, correlation, and alerting.
   enabled host on its own interval, so detection happens whether or not
   anyone is looking at the screen. Off per host by default; the dashboard
   reports whether it is running and when the next collection is due.
-- **Rule-based detection engine** — nine rules (R-01 … R-09) with `LOW` /
+- **File Integrity Monitoring** — hashes watched files with SHA-256 and
+  reports any that stop matching their baseline: modified, deleted, or newly
+  appeared. Works on all three collection methods, and the first scan records
+  the baseline silently rather than alerting on every existing file.
+- **Rule-based detection engine** — ten rules (R-01 … R-10) with `LOW` /
   `MEDIUM` / `HIGH` severities, re-runnable at any time over stored events.
 - **Dashboard** — summary statistics, Chart.js charts (failure trend,
   severity split, alerts per rule), top attacking IPs, recent USB devices,
@@ -75,12 +79,14 @@ Implemented in [`app/services/detection.py`](app/services/detection.py).
 | R-07 | Privilege Change | An account was added to a security group, or had its password reset by someone else (4732 / 4724). | `MEDIUM` |
 | R-08 | Account Lockout | Windows locked an account out after repeated failures (4740). | `MEDIUM` |
 | R-09 | External Device Connected | A USB storage device was connected to a monitored host (Event 6416). No threshold — every connection is reported. | `MEDIUM` |
+| R-10 | File Integrity | A watched file stopped matching its recorded SHA-256 hash. | `HIGH` modified/deleted, `MEDIUM` appeared |
 
 R-01–R-04 detect attacks in progress. R-05–R-08 cover what an intruder does
 *after* getting in: escalating privilege, establishing persistence, and
 erasing the evidence. R-09 covers the physical route in and out — a USB drive
 carries data off a machine, and malware onto one, without touching the network
-the other rules watch.
+the other rules watch. R-10 covers what is left behind: every other rule reads
+a log, and no log records that a file quietly changed.
 
 R-07 deliberately ignores ordinary administrative logons (4672) — they happen
 every time an admin signs in, and alerting on them would train the operator to
@@ -91,6 +97,12 @@ R-09 requires Plug and Play auditing to be enabled on the monitored machine
 (see [`docs/REAL_WORLD_LAB_SETUP.md`](docs/REAL_WORLD_LAB_SETUP.md)). Where it
 is not enabled the host simply reports no device events — collection carries
 on normally rather than failing.
+
+R-10 severity follows how hard the change is to explain innocently. A modified
+or deleted file was already known and trusted and something deliberately
+changed it, so both are `HIGH`. A file that merely appeared is `MEDIUM` — a
+directory legitimately gains files during ordinary use, and treating that as
+critical would train the operator to dismiss the rule.
 
 Thresholds are configurable in `.env` (see `.env.example`). Addresses marked
 `TRUSTED` are suppressed entirely. Re-running detection never duplicates an
@@ -152,6 +164,58 @@ off, the password is wrong, or the account lacks permission.
 
 See [`docs/REAL_WORLD_LAB_SETUP.md`](docs/REAL_WORLD_LAB_SETUP.md) for exact
 setup and demo-day steps.
+
+## File integrity monitoring
+
+Every other rule in this project reads a log. No log records that a file
+quietly changed — and editing a startup script, replacing a binary or dropping
+a payload into a directory nobody reads is how an intruder persists after the
+logon that let them in has scrolled out of view. Authentication monitoring
+answers *who got in*; this answers *what did they leave behind*.
+
+```
+   watched path              first scan            later scans
+   ────────────              ──────────            ───────────
+   C:\...\etc\hosts    ──▶  hash + store   ──▶   hash + compare
+   C:\...\Startup\           (the baseline)          │
+                                                      ▼
+                                          modified · appeared · deleted
+                                                      ▼
+                                            Event ▸ R-10 ▸ Alert
+```
+
+Add a path with the **Files** button on any host row. The mechanism is
+deliberately old-fashioned: hash the bytes, store the hash, compare next time.
+A changed hash is proof the contents changed whatever the timestamps claim,
+which matters because modification times are trivially forged and hashes are
+not.
+
+Four behaviours are worth knowing:
+
+- **The first scan is silent.** It records the baseline and reports nothing.
+  Without that rule, switching monitoring on for a directory of four hundred
+  files would produce four hundred alerts, and the operator would learn to
+  ignore the panel on the day it was turned on.
+- **A reported change updates the baseline.** The new state becomes what is
+  compared against, so one modification is not re-reported on every later
+  scan, burying whatever changes next.
+- **Re-baselining is manual, never automatic.** After a legitimate change such
+  as a software update, **Reset baseline** discards the recorded hashes. A
+  system that quietly re-baselined after reporting a change would erase the
+  evidence it exists to keep.
+- **No user is claimed.** Hashing a file proves it changed, never who changed
+  it. The event records `UNKNOWN` rather than inventing an actor.
+
+Findings become ordinary `Event` rows through the same pipeline as collected
+logs, so they are archived to Parquet, de-duplicated and passed to the
+detection engine like anything else. Scans run on the automatic-collection
+schedule when enabled for a host, and on demand from the same dialog.
+
+Each watched path contributes at most 500 files per scan, and files over 64 MB
+are tracked by size and modification time rather than hashed. Both limits
+exist because a recursive watch pointed at a system directory would otherwise
+ask a remote host to hash tens of thousands of files; hitting the cap is
+reported rather than silently truncated.
 
 ## Automatic collection
 
@@ -231,6 +295,7 @@ apply rules → store alerts → visualize**.
 | Dashboard | Summary counts, charts and recent activity. | `blueprints/api/stats.py` |
 | Collection | One pipeline shared by the Collect button and the scheduler. | `services/collection.py` |
 | Scheduling | Polls each enabled host on its own interval. | `services/scheduler.py`, `blueprints/api/scheduler.py` |
+| File Integrity | Hashes watched files and compares against the baseline. | `services/file_integrity.py`, `blueprints/api/integrity.py` |
 
 ## Tools & Technologies
 
@@ -248,13 +313,15 @@ fully offline.
 mini-siem/
 ├── app/
 │   ├── blueprints/
-│   │   ├── api/            # hosts, threat_intel, events, alerts, stats, scheduler
+│   │   ├── api/            # hosts, threat_intel, events, alerts, stats,
+│   │   │                   #   scheduler, integrity
 │   │   ├── auth.py         # login / logout
 │   │   └── ui.py           # server-rendered pages
 │   ├── services/
 │   │   ├── collection.py   # the collection pipeline, trigger-agnostic
 │   │   ├── scheduler.py    # background automatic collection
-│   │   ├── detection.py    # R-01 .. R-09 rule engine
+│   │   ├── file_integrity.py # SHA-256 baselines and comparison (R-10)
+│   │   ├── detection.py    # R-01 .. R-10 rule engine
 │   │   ├── log_analyzer.py # ingestion pipeline
 │   │   ├── log_collector.py# live Linux/Windows collection
 │   │   ├── sample_loader.py# sample log parsers
@@ -263,7 +330,8 @@ mini-siem/
 │   │   └── win_client.py   # PowerShell wrapper
 │   ├── static/             # CSS & ES-module JS
 │   ├── templates/          # Jinja2 templates
-│   ├── models.py           # users, hosts, IPs, events, alerts
+│   ├── models.py           # users, hosts, IPs, events, alerts,
+│   │                       #   watched paths, file baselines
 │   └── validators.py       # server-side input validation
 ├── docs/                   # installation, user manual, testing report
 ├── samples/                # sample log files (D-05)

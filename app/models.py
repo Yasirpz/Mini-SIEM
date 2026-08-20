@@ -111,6 +111,24 @@ EVT_PROCESS_CREATED = 'PROCESS_CREATED'              # 4688
 # even though no source address is involved.
 EVT_USB_DEVICE_CONNECTED = 'USB_DEVICE_CONNECTED'    # 6416
 
+# File Integrity Monitoring. Windows and Linux both log who signed in, but
+# neither logs that a file quietly changed -- and altering a binary, a
+# configuration file or a startup script is how an intruder persists after
+# the logon that let them in has scrolled out of view. These events are
+# produced by comparing a fresh hash against a stored baseline rather than by
+# reading any log, which is why they have no event ID.
+EVT_FILE_MODIFIED = 'FILE_MODIFIED'
+EVT_FILE_ADDED = 'FILE_ADDED'
+EVT_FILE_DELETED = 'FILE_DELETED'
+FILE_INTEGRITY_EVENT_TYPES = (EVT_FILE_MODIFIED, EVT_FILE_ADDED, EVT_FILE_DELETED)
+
+# How many files one watched path may contribute to a single scan. A path
+# pointed at a whole system directory could otherwise ask the host to hash
+# tens of thousands of files, which on a remote machine means a scan that
+# never finishes. Reaching the cap is reported rather than silently truncated,
+# because a partial scan that looks complete is worse than no scan.
+FIM_MAX_FILES_PER_PATH = 500
+
 # Event types that the detection rules treat as authentication failures.
 # Deliberately unchanged: rule R-01 counts login *attempts*, so a lockout
 # (the result of failures already counted) must not inflate it, and a
@@ -121,6 +139,9 @@ FAILURE_EVENT_TYPES = (EVT_FAILED_LOGIN, EVT_INVALID_USER, EVT_WIN_FAILED_LOGIN)
 # is what an intruder does once inside: gaining privilege, creating accounts,
 # widening group membership, or erasing the evidence.
 SENSITIVE_EVENT_TYPES = (
+    EVT_FILE_MODIFIED,
+    EVT_FILE_ADDED,
+    EVT_FILE_DELETED,
     EVT_ACCOUNT_LOCKOUT,
     EVT_EXPLICIT_CREDENTIALS,
     EVT_ACCOUNT_CREATED,
@@ -202,6 +223,15 @@ class Host(db.Model):
     # automatic collection.
     last_poll = db.Column(db.DateTime)
 
+    # --- File Integrity Monitoring -----------------------------------------
+    # Off by default, like polling and for the same reason: hashing files on a
+    # remote machine is real work done to somebody else's computer, and an
+    # upgrade should not start doing it uninvited.
+    fim_enabled = db.Column(db.Boolean, default=False, nullable=False,
+                            server_default='0')
+    last_integrity_scan = db.Column(db.DateTime)
+    last_integrity_error = db.Column(db.String(500))
+
     log_sources = db.relationship(
         'LogSource', backref='host', lazy='dynamic', cascade='all, delete-orphan'
     )
@@ -213,6 +243,12 @@ class Host(db.Model):
     )
     archives = db.relationship(
         'LogArchive', backref='host', lazy='dynamic', cascade='all, delete-orphan'
+    )
+    watched_paths = db.relationship(
+        'WatchedPath', backref='host', lazy='dynamic', cascade='all, delete-orphan'
+    )
+    file_baselines = db.relationship(
+        'FileBaseline', backref='host', lazy='dynamic', cascade='all, delete-orphan'
     )
 
     def effective_collection_method(self):
@@ -322,6 +358,11 @@ class Host(db.Model):
             'poll_interval_effective': self.effective_poll_interval(),
             'last_poll': _fmt(self.last_poll),
             'next_poll': _fmt(self.next_poll_at()),
+            'fim_enabled': bool(self.fim_enabled),
+            'watched_path_count': self.watched_paths.count(),
+            'baseline_file_count': self.file_baselines.count(),
+            'last_integrity_scan': _fmt(self.last_integrity_scan),
+            'last_integrity_error': self.last_integrity_error,
         }
 
 
@@ -397,6 +438,11 @@ class Event(db.Model):
     # human reader.
     device_name = db.Column(db.String(200))
 
+    # Only file-integrity events supply this. Unlike device_name it *is* part
+    # of the de-duplication key, because two different files changing in the
+    # same second are two findings, not one repeated one.
+    file_path = db.Column(db.String(500))
+
     alerts = db.relationship(
         'Alert', backref='event', lazy='dynamic', cascade='all, delete-orphan'
     )
@@ -412,6 +458,7 @@ class Event(db.Model):
             'username': self.username,
             'message': self.message,
             'device_name': self.device_name,
+            'file_path': self.file_path,
             'origin': self.origin,
         }
 
@@ -442,6 +489,95 @@ class Alert(db.Model):
             'severity': self.severity,
             'source_ip': self.source_ip,
             'acknowledged': bool(self.acknowledged),
+        }
+
+
+# === FILE INTEGRITY MONITORING ===
+#
+# Two tables, because they answer two different questions. WatchedPath is what
+# the operator asked to be watched and is edited by hand; FileBaseline is what
+# was actually found there and is written only by the scanner. Keeping them
+# apart means deleting a watched path cannot destroy the evidence of what its
+# files used to look like until the operator says so, and it means the
+# interface never has to show a list of four hundred hashes to explain that
+# one directory is being watched.
+class WatchedPath(db.Model):
+    """A file or directory whose contents are checked for tampering."""
+
+    __tablename__ = 'watched_paths'
+    id = db.Column(db.Integer, primary_key=True)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False, index=True)
+    path = db.Column(db.String(500), nullable=False)
+    # Directories are walked one level deep unless this is set. Recursion is
+    # opt-in because pointing a recursive watch at a system directory is the
+    # easy way to ask a host to hash a hundred thousand files.
+    recursive = db.Column(db.Boolean, default=False, nullable=False, server_default='0')
+    description = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime, default=utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('host_id', 'path', name='uq_watched_path_per_host'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'host_id': self.host_id,
+            'path': self.path,
+            'recursive': bool(self.recursive),
+            'description': self.description or '',
+            'created_at': _fmt(self.created_at),
+            'file_count': FileBaseline.query.filter_by(
+                host_id=self.host_id, watched_path_id=self.id
+            ).count(),
+        }
+
+
+class FileBaseline(db.Model):
+    """
+    The last known good state of one file.
+
+    The hash is what the comparison actually turns on. Size and modification
+    time are stored alongside it as corroboration for the human reading the
+    alert -- a file whose hash changed but whose size did not is a different
+    story from one that grew by two megabytes.
+    """
+
+    __tablename__ = 'file_baselines'
+    id = db.Column(db.Integer, primary_key=True)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False, index=True)
+    watched_path_id = db.Column(
+        db.Integer, db.ForeignKey('watched_paths.id', ondelete='CASCADE'), index=True
+    )
+    path = db.Column(db.String(500), nullable=False, index=True)
+    sha256 = db.Column(db.String(64), nullable=False)
+    size_bytes = db.Column(db.Integer)
+    modified_at = db.Column(db.DateTime)
+
+    first_seen = db.Column(db.DateTime, default=utcnow)
+    # Refreshed on every scan that still finds the file, so a baseline row that
+    # has stopped being touched is visibly stale rather than silently so.
+    last_seen = db.Column(db.DateTime, default=utcnow)
+    # Only moves when the hash actually changed, which makes it the answer to
+    # "when was this file last tampered with".
+    last_changed = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.UniqueConstraint('host_id', 'path', name='uq_file_baseline_per_host'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'host_id': self.host_id,
+            'watched_path_id': self.watched_path_id,
+            'path': self.path,
+            'sha256': self.sha256,
+            'size_bytes': self.size_bytes,
+            'modified_at': _fmt(self.modified_at),
+            'first_seen': _fmt(self.first_seen),
+            'last_seen': _fmt(self.last_seen),
+            'last_changed': _fmt(self.last_changed),
         }
 
 

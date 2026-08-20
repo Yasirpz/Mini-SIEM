@@ -16,6 +16,7 @@ const alertsBody = document.getElementById('alertsBody');
 const topSources = document.getElementById('topSources');
 const hostOverviewBody = document.getElementById('hostOverviewBody');
 const usbBody = document.getElementById('usbBody');
+const integrityBody = document.getElementById('integrityBody');
 const liveStatus = document.getElementById('liveStatus');
 
 // How often the dashboard redraws itself while automatic collection is
@@ -114,6 +115,7 @@ async function loadAll() {
         refreshHostsList(),
         refreshAlertsTable(),
         refreshUsbDevices(),
+        refreshIntegrityChanges(),
         refreshLiveStatus(),
     ]);
 }
@@ -317,6 +319,61 @@ async function refreshTopSources() {
 // ======================= REMOVABLE MEDIA =======================
 
 /**
+ * Recent file integrity findings.
+ *
+ * Read through the ordinary events endpoint like the USB panel, once per
+ * change type, because /api/events filters on a single event_type. Three small
+ * queries against an indexed column are cheaper than adding a bespoke route
+ * that would duplicate filtering the events API already performs.
+ */
+async function refreshIntegrityChanges() {
+    if (!integrityBody) return;
+    clearContainer(integrityBody);
+
+    const labels = {
+        FILE_MODIFIED: ['modified', 'text-bg-danger'],
+        FILE_DELETED: ['deleted', 'text-bg-danger'],
+        FILE_ADDED: ['appeared', 'text-bg-warning'],
+    };
+
+    try {
+        const batches = await Promise.all(
+            Object.keys(labels).map((type) => fetchEvents({ event_type: type, limit: 10 })),
+        );
+
+        const rows = batches
+            .flatMap((batch) => batch.events)
+            .sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))
+            .slice(0, 10);
+
+        if (rows.length === 0) {
+            // An empty panel is the healthy state here, but it is also what a
+            // host with nothing watched looks like — so say which.
+            emptyRow(integrityBody, 4,
+                'No integrity changes recorded. Add a watched path on the Configuration page to start checking files.');
+            return;
+        }
+
+        rows.forEach((event) => {
+            const row = createEl('tr', [], '', integrityBody);
+            createEl('td', ['text-nowrap', 'small'], formatTime(event.timestamp), row);
+            createEl('td', ['small'], event.host_name, row);
+
+            const [label, badgeClass] = labels[event.event_type] || ['changed', 'text-bg-secondary'];
+            const cell = createEl('td', [], '', row);
+            createEl('span', ['badge', badgeClass], label, cell);
+
+            const fileCell = createEl('td', ['small', 'font-monospace', 'text-truncate'],
+                event.file_path || '-', row);
+            fileCell.style.maxWidth = '320px';
+            fileCell.title = event.message || event.file_path || '';
+        });
+    } catch (err) {
+        emptyRow(integrityBody, 4, `Could not load integrity changes: ${err.message}`);
+    }
+}
+
+/**
  * Recent USB connections, read from the ordinary events endpoint with an
  * event_type filter. A dedicated API route would duplicate logic that
  * /api/events already performs, so none is added.
@@ -461,6 +518,7 @@ async function handleFetchLogs(host, btn) {
         await Promise.allSettled([
             refreshStats(), refreshCharts(), refreshAlertsTable(),
             refreshTopSources(), refreshUsbDevices(), refreshHostOverview(),
+            refreshIntegrityChanges(),
         ]);
     } catch (err) {
         notify(`Log collection failed for ${host.hostname}: ${err.message}`, 'danger');

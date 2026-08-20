@@ -75,6 +75,25 @@ export const triggerLogFetch = (hostId) =>
 export const testHostConnection = (hostId) =>
     request(`/api/hosts/${hostId}/test`, { method: 'POST' });
 
+// --- FILE INTEGRITY MONITORING ---
+export const fetchWatchedPaths = (hostId) =>
+    request(`/api/hosts/${hostId}/watched-paths`);
+
+export const createWatchedPath = (hostId, data) =>
+    request(`/api/hosts/${hostId}/watched-paths`, { method: 'POST', body: jsonBody(data) });
+
+export const removeWatchedPath = (pathId) =>
+    request(`/api/watched-paths/${pathId}`, { method: 'DELETE' });
+
+export const runIntegrityScan = (hostId) =>
+    request(`/api/hosts/${hostId}/integrity-scan`, { method: 'POST' });
+
+export const fetchBaselines = (hostId, limit = 100) =>
+    request(`/api/hosts/${hostId}/baselines?limit=${limit}`);
+
+export const resetBaseline = (hostId) =>
+    request(`/api/hosts/${hostId}/baselines`, { method: 'DELETE' });
+
 // --- AUTOMATIC COLLECTION (BACKGROUND SCHEDULER) ---
 export const fetchSchedulerStatus = () => request('/api/scheduler');
 

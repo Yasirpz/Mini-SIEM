@@ -81,14 +81,18 @@ class LogAnalyzer:
 
         Collectors fetch by time window, so the same log line can legitimately
         arrive twice. Events are therefore de-duplicated on the natural key
-        (host, timestamp, type, source IP, username). The device name is
-        deliberately not part of that key: it is descriptive detail carried
-        alongside an event, not something that makes two records distinct.
+        (host, timestamp, type, source IP, username, file path). The device
+        name is deliberately not part of that key: it is descriptive detail
+        carried alongside an event, not something that makes two records
+        distinct. The file path is the opposite case -- two files changing in
+        the same second are two findings, so it has to distinguish them. It is
+        NULL for every source except file-integrity scanning, which leaves the
+        key unchanged for everything that existed before.
 
         Returns (stored_count, duplicates_skipped).
         """
         existing = {
-            (e.timestamp, e.event_type, e.source_ip, e.username)
+            (e.timestamp, e.event_type, e.source_ip, e.username, e.file_path)
             for e in Event.query.filter_by(host_id=host_id).all()
         }
 
@@ -100,8 +104,9 @@ class LogAnalyzer:
             event_type = raw.get('alert_type')
             source_ip = _clean(raw.get('source_ip'))
             username = _clean(raw.get('user'))
+            file_path = _clean(raw.get('file_path'))
 
-            key = (timestamp, event_type, source_ip, username)
+            key = (timestamp, event_type, source_ip, username, file_path)
             if key in existing:
                 skipped += 1
                 continue
@@ -118,6 +123,8 @@ class LogAnalyzer:
                     # Only removable-media events supply this; every other
                     # source leaves the column NULL.
                     device_name=_clean(raw.get('device_name')),
+                    # Only file-integrity findings supply this.
+                    file_path=file_path,
                     origin=origin,
                     ingested_at=utcnow(),
                 )

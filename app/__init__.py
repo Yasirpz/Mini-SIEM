@@ -98,9 +98,14 @@ def _add_missing_columns():
             'polling_enabled': 'BOOLEAN NOT NULL DEFAULT 0',
             'poll_interval_seconds': 'INTEGER',
             'last_poll': 'DATETIME',
+            # File integrity monitoring, opt-in for the same reason.
+            'fim_enabled': 'BOOLEAN NOT NULL DEFAULT 0',
+            'last_integrity_scan': 'DATETIME',
+            'last_integrity_error': 'VARCHAR(500)',
         },
         'events': {
             'device_name': 'VARCHAR(200)',
+            'file_path': 'VARCHAR(500)',
         },
     }
 

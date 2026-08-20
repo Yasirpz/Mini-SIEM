@@ -74,6 +74,7 @@ def add_host():
         remote_user=validate_text(data.get('remote_user'), 'remote user', 100),
         polling_enabled=validate_bool(data.get('polling_enabled', False), 'polling_enabled'),
         poll_interval_seconds=validate_poll_interval(data.get('poll_interval_seconds')),
+        fim_enabled=validate_bool(data.get('fim_enabled', False), 'fim_enabled'),
     )
     db.session.add(host)
     db.session.commit()
@@ -126,6 +127,9 @@ def update_host(host_id):
 
     if 'poll_interval_seconds' in data:
         host.poll_interval_seconds = validate_poll_interval(data['poll_interval_seconds'])
+
+    if 'fim_enabled' in data:
+        host.fim_enabled = validate_bool(data['fim_enabled'], 'fim_enabled')
 
     db.session.commit()
     return jsonify(host.to_dict()), 200

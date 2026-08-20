@@ -10,8 +10,9 @@ project proposal:
     R-03  Threat IP Match Rule       source IP is BANNED in the registry
     R-04  Multiple Host Attempt Rule same source IP attacking several hosts
 
-Later rules extend the same engine to post-compromise and physical activity,
-up to R-09 (an external storage device connected to a monitored machine).
+Later rules extend the same engine to post-compromise and physical activity:
+up to R-09 (an external storage device connected to a monitored machine) and
+R-10 (a file under integrity monitoring stopped matching its baseline).
 
 The engine runs over Event rows that are already stored in the database, so
 rules can be re-applied at any time without re-collecting logs. Every alert is
@@ -37,6 +38,9 @@ from app.models import (
     EVT_GROUP_MEMBER_ADDED,
     EVT_PASSWORD_RESET,
     EVT_INVALID_USER,
+    EVT_FILE_ADDED,
+    EVT_FILE_DELETED,
+    EVT_FILE_MODIFIED,
     EVT_USB_DEVICE_CONNECTED,
     IP_BANNED,
     IP_TRUSTED,
@@ -69,7 +73,7 @@ class RuleResult:
 
 
 class DetectionEngine:
-    """Applies the R-01..R-04 rules to stored events and writes Alert rows."""
+    """Applies the R-01..R-10 rules to stored events and writes Alert rows."""
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -118,6 +122,7 @@ class DetectionEngine:
         candidates.extend(DetectionEngine.rule_07_privilege_change(events))
         candidates.extend(DetectionEngine.rule_08_lockout(events))
         candidates.extend(DetectionEngine.rule_09_external_device(events))
+        candidates.extend(DetectionEngine.rule_10_file_integrity(events))
 
         return DetectionEngine._persist(candidates)
 
@@ -462,6 +467,61 @@ class DetectionEngine:
         ]
 
     # ------------------------------------------------------------------
+    # R-10: a watched file changed
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def rule_10_file_integrity(events):
+        """
+        A file under integrity monitoring stopped matching its baseline.
+
+        This is the rule that catches what happens *after* a break-in. Every
+        other rule here watches the front door; an intruder who is already
+        inside persists by editing a startup script, replacing a binary or
+        dropping a payload into a directory nobody reads. None of that
+        produces an authentication event, so nothing else in this engine would
+        ever see it.
+
+        Severity follows how hard the change is to explain innocently. A
+        modified or deleted file was already known and trusted, and something
+        deliberately changed it, so both are HIGH. A newly appeared file is
+        MEDIUM: unexpected, worth looking at, but a directory legitimately
+        gains files during ordinary use and treating that as critical would
+        train the operator to dismiss the rule.
+
+        There is no threshold. Unlike a failed password there is no innocent
+        background rate of watched system files silently changing, and the
+        scanner has already established a baseline precisely so that routine
+        state is not reported as a finding.
+        """
+        severities = {
+            EVT_FILE_MODIFIED: SEVERITY_HIGH,
+            EVT_FILE_DELETED: SEVERITY_HIGH,
+            EVT_FILE_ADDED: SEVERITY_MEDIUM,
+        }
+        wording = {
+            EVT_FILE_MODIFIED: 'was modified',
+            EVT_FILE_DELETED: 'was deleted',
+            EVT_FILE_ADDED: 'appeared',
+        }
+
+        return [
+            RuleResult(
+                rule_id='R-10',
+                event=event,
+                severity=severities[event.event_type],
+                alert_type='FILE_INTEGRITY',
+                message=(
+                    f"Integrity check failed: '{event.file_path or 'unknown file'}' "
+                    f"{wording[event.event_type]} on {event.host.hostname if event.host else 'a monitored host'}. "
+                    f"Confirm the change was authorised."
+                ),
+            )
+            for event in events
+            if event.event_type in severities
+        ]
+
+    # ------------------------------------------------------------------
     # Threat Intelligence registry upkeep
     # ------------------------------------------------------------------
 
@@ -523,7 +583,7 @@ class DetectionEngine:
         counts = {
             'R-01': 0, 'R-02': 0, 'R-03': 0, 'R-04': 0,
             'R-05': 0, 'R-06': 0, 'R-07': 0, 'R-08': 0,
-            'R-09': 0,
+            'R-09': 0, 'R-10': 0,
         }
 
         if not candidates:

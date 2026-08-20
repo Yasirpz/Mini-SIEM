@@ -153,3 +153,43 @@ def validate_bool(value, field):
         if lowered in ('false', '0', 'no', 'off', ''):
             return False
     raise ValidationError(f'{field} must be true or false')
+
+
+def validate_watched_path(value):
+    """
+    Validate a filesystem path submitted for integrity monitoring.
+
+    The path is not checked for existence: it may live on a remote host this
+    process cannot see, and a path that does not exist yet is a legitimate
+    thing to watch -- a file appearing where none should be is exactly the
+    kind of change this feature is for.
+
+    What is rejected is a path that could not be sent to a shell safely. The
+    Windows and Linux scanners both quote the value before use, but a newline
+    would end the quoted string on the remote side, so it is refused here
+    rather than relied upon to be harmless later.
+    """
+    if value is None:
+        raise ValidationError('path is required')
+
+    path = str(value).strip()
+
+    if not path:
+        raise ValidationError('path is required')
+    if len(path) > 500:
+        raise ValidationError('path must be 500 characters or fewer')
+    if _has_control_characters(path):
+        raise ValidationError('path must not contain line breaks or null bytes')
+
+    return path
+
+
+def _has_control_characters(text):
+    """
+    True if a string holds a character that would break out of a quoted shell
+    argument, or terminate a C string on the far side of one.
+
+    Checked by category rather than against a list of characters, so a control
+    character nobody thought to enumerate is caught as well.
+    """
+    return any(ord(char) < 32 or ord(char) == 127 for char in text)
