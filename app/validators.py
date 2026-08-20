@@ -13,6 +13,7 @@ from app.models import (
     COLLECT_WINRM,
     COLLECTION_METHODS,
     IP_STATUSES,
+    MIN_POLL_INTERVAL_SECONDS,
 )
 
 HOSTNAME_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9 ._-]{0,99}$')
@@ -109,3 +110,46 @@ def validate_text(value, field, max_length):
     if len(text) > max_length:
         raise ValidationError(f"{field} must be {max_length} characters or fewer")
     return text
+
+
+def validate_poll_interval(value):
+    """
+    Return the automatic-collection interval in seconds, or None for "use the
+    default".
+
+    An upper bound is enforced as well as a lower one. A week-long interval is
+    almost certainly a typing mistake, and accepting it would leave a host
+    that looks monitored on the dashboard but is in practice never collected
+    from -- a worse outcome than being told the number is wrong.
+    """
+    if value is None or value == '':
+        return None
+
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        raise ValidationError('poll interval must be a whole number of seconds')
+
+    if seconds < MIN_POLL_INTERVAL_SECONDS:
+        raise ValidationError(
+            f'poll interval must be at least {MIN_POLL_INTERVAL_SECONDS} seconds'
+        )
+    if seconds > 86400:
+        raise ValidationError('poll interval must be 86400 seconds (24 hours) or less')
+
+    return seconds
+
+
+def validate_bool(value, field):
+    """Accept the several ways a browser or a script may spell a boolean."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ('true', '1', 'yes', 'on'):
+            return True
+        if lowered in ('false', '0', 'no', 'off', ''):
+            return False
+    raise ValidationError(f'{field} must be true or false')

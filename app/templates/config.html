@@ -55,10 +55,28 @@
                                     The password is read from <code>.env</code>, never stored in the database.
                                 </div>
                             </div>
-                            <div class="mb-3">
+                            <div class="mb-2">
                                 <label class="form-label form-label-sm mb-1">Description <span class="text-muted">(optional)</span></label>
                                 <input type="text" id="hostDesc" class="form-control form-control-sm"
                                        placeholder="Lab workstation, room 4">
+                            </div>
+                            <div class="mb-3 border-top pt-2">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="hostPolling">
+                                    <label class="form-check-label form-label-sm" for="hostPolling">
+                                        Collect automatically
+                                    </label>
+                                </div>
+                                <div class="input-group input-group-sm mt-1">
+                                    <span class="input-group-text">every</span>
+                                    <input type="number" id="hostPollInterval" class="form-control"
+                                           min="30" step="30" placeholder="300">
+                                    <span class="input-group-text">seconds</span>
+                                </div>
+                                <div class="form-text small">
+                                    Leave blank for the default of 5 minutes. Collection is
+                                    incremental, so polling a quiet host stores nothing.
+                                </div>
                             </div>
                             <button type="submit" class="btn btn-primary btn-sm w-100">Add Host</button>
                         </form>
@@ -70,6 +88,22 @@
                     <div class="card-header bg-secondary text-white py-2 d-flex justify-content-between align-items-center" data-bs-theme="dark">
                         <h6 class="mb-0">Monitored Hosts</h6>
                         <button id="refreshHostsBtn" class="btn btn-sm btn-outline-light py-0">Refresh</button>
+                    </div>
+                    <!-- Automatic collection is a property of the whole system,
+                         so it is reported once here rather than repeated on
+                         every host row. -->
+                    <div class="card-body border-bottom py-2">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <div class="small fw-semibold mb-1">Automatic collection</div>
+                                <div id="schedulerStatus" class="d-flex align-items-center flex-wrap gap-1">
+                                    <span class="small text-muted">Loading…</span>
+                                </div>
+                            </div>
+                            <button id="runSchedulerBtn" class="btn btn-sm btn-outline-secondary flex-shrink-0">
+                                Run now
+                            </button>
+                        </div>
                     </div>
                     <div class="card-body p-0">
                         <div id="hostsListAdmin" class="list-group list-group-flush"
@@ -168,6 +202,20 @@
                   <div class="form-text small">Password comes from <code>.env</code>.</div></div>
                 <div class="mb-2"><label class="form-label">Description</label>
                   <input type="text" id="editHostDesc" class="form-control"></div>
+                <div class="mb-2 border-top pt-2">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="editHostPolling">
+                        <label class="form-check-label" for="editHostPolling">
+                            Collect automatically
+                        </label>
+                    </div>
+                    <div class="input-group input-group-sm mt-1">
+                        <span class="input-group-text">every</span>
+                        <input type="number" id="editHostPollInterval" class="form-control"
+                               min="30" step="30">
+                        <span class="input-group-text">seconds</span>
+                    </div>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>

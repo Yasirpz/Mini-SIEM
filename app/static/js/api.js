@@ -75,6 +75,11 @@ export const triggerLogFetch = (hostId) =>
 export const testHostConnection = (hostId) =>
     request(`/api/hosts/${hostId}/test`, { method: 'POST' });
 
+// --- AUTOMATIC COLLECTION (BACKGROUND SCHEDULER) ---
+export const fetchSchedulerStatus = () => request('/api/scheduler');
+
+export const runSchedulerNow = () => request('/api/scheduler/run', { method: 'POST' });
+
 // --- THREAT INTELLIGENCE (IP REGISTRY) ---
 export const fetchIPs = () => request('/api/ips');
 export const createIP = (data) => request('/api/ips', { method: 'POST', body: jsonBody(data) });

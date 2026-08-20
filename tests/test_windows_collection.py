@@ -351,7 +351,7 @@ def test_collection_endpoint_explains_why_the_log_is_unreadable(auth_client, app
     db.session.add(host)
     db.session.commit()
 
-    from app.blueprints.api import hosts as hosts_api
+    from app.services import collection as collection_service
 
     class DeniedClient:
         def __enter__(self):
@@ -367,7 +367,9 @@ def test_collection_endpoint_explains_why_the_log_is_unreadable(auth_client, app
         def is_elevated():
             return False
 
-    monkeypatch.setattr(hosts_api, 'WinClient', DeniedClient)
+    # The collect route delegates to app.services.collection, so the
+    # patch has to land where the pipeline actually looks the name up.
+    monkeypatch.setattr(collection_service, 'WinClient', DeniedClient)
 
     response = auth_client.post(f'/api/hosts/{host.id}/logs')
     payload = response.get_json()
@@ -586,9 +588,9 @@ def test_collect_endpoint_reports_missing_elevation(auth_client, app, monkeypatc
     """
     host = _windows_host()
 
-    import app.blueprints.api.hosts as hosts_module
+    import app.services.collection as collection_service
     monkeypatch.setattr(
-        hosts_module, 'WinClient', lambda: FakeWinClient(None, readable=False)
+        collection_service, 'WinClient', lambda: FakeWinClient(None, readable=False)
     )
 
     response = auth_client.post(f'/api/hosts/{host.id}/logs')
@@ -604,9 +606,9 @@ def test_collect_endpoint_reports_missing_elevation(auth_client, app, monkeypatc
 def test_collect_endpoint_stores_collected_events(auth_client, app, monkeypatch):
     host = _windows_host()
 
-    import app.blueprints.api.hosts as hosts_module
+    import app.services.collection as collection_service
     monkeypatch.setattr(
-        hosts_module,
+        collection_service,
         'WinClient',
         lambda: FakeWinClient([
             win_record(4625, timestamp='2026-08-15 11:00:00'),
@@ -628,9 +630,9 @@ def test_collect_endpoint_stores_collected_events(auth_client, app, monkeypatch)
 def test_repeated_collection_does_not_duplicate_events(auth_client, app, monkeypatch):
     host = _windows_host()
 
-    import app.blueprints.api.hosts as hosts_module
+    import app.services.collection as collection_service
     monkeypatch.setattr(
-        hosts_module,
+        collection_service,
         'WinClient',
         lambda: FakeWinClient([win_record(4625, timestamp='2026-08-15 11:00:00')]),
     )

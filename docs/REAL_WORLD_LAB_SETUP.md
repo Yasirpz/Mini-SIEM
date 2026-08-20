@@ -376,6 +376,32 @@ re-collected."
 21. **Test** the Linux host → three green checks.
 22. **Collect Logs** → SSH events appear alongside the Windows ones.
 
+### Part G — automatic collection
+
+This is the part that shows the system monitoring rather than being operated.
+Set it up *before* the demonstration starts.
+
+23. **Configuration** → switch **auto-collect** on for your local host and set
+    the interval to `60`. The panel above the host list should read
+    **running**, and the dashboard heading should show a **live** badge.
+24. Leave the **Dashboard** open on screen.
+25. Now cause something: fail a sign-in at the lock screen, or plug in a USB
+    drive. Do not touch Mini-SIEM.
+26. Keep talking. Within about a minute the event, and any alert it triggers,
+    appears on the dashboard on its own — no button, no page reload.
+
+**Say:** "Until now every collection began with me pressing a button, which
+means nothing would be noticed unless somebody was already watching. The
+scheduler runs the identical pipeline on a timer, per host. What you just saw
+was the system detecting something while nobody was operating it — which is
+the difference between a log viewer and a monitor."
+
+If the room's timing is tight, **Run now** forces a round immediately rather
+than waiting for the interval.
+
+> Note that automatic collection lives in the Flask process. Closing the
+> server stops it; it is not installed as a Windows service.
+
 ---
 
 ## 8. Troubleshooting
@@ -392,6 +418,9 @@ re-collected."
 | USB panel empty after enabling auditing | The drive was already plugged in | Unplug it and reconnect, then collect again |
 | Host shows 🔴 offline | Last attempt failed | Hover the badge, or read *Last error* on the host row |
 | Login rejected | Wrong copy of the project | Confirm you started Flask from `Desktop\Mini-SIEM` |
+| Dashboard badge says "manual" | No host has auto-collect switched on | Turn the switch on for a host on the Configuration page |
+| Scheduler panel says "not running" | `SCHEDULER_ENABLED=false`, or the server was not restarted | Set it to `true` in `.env` and restart Flask |
+| Automatic collection never fires | Interval not yet elapsed | Press **Run now**, or lower the interval |
 
 ---
 

@@ -5,6 +5,7 @@ import { createEl, clearContainer, notify, formatTime } from './dom.js';
 import {
     fetchHosts, createHost, updateHost, removeHost, triggerLogFetch,
     testHostConnection, fetchIPs, createIP, updateIP, removeIP,
+    fetchSchedulerStatus, runSchedulerNow,
 } from './api.js';
 
 const hostsContainer = document.getElementById('hostsListAdmin');
@@ -30,6 +31,11 @@ export async function initAdmin() {
     bindClick('refreshHostsBtn', refreshHosts);
     bindClick('refreshIPsBtn', refreshIPs);
 
+    const runNowBtn = document.getElementById('runSchedulerBtn');
+    if (runNowBtn) {
+        runNowBtn.addEventListener('click', () => handleRunSchedulerNow(runNowBtn));
+    }
+
     if (hostsContainer) await refreshHosts();
     if (ipContainer) await refreshIPs();
 }
@@ -51,6 +57,7 @@ async function refreshHosts() {
             return;
         }
         hosts.forEach(renderHostRow);
+        await refreshSchedulerPanel();
     } catch (err) {
         createEl('div', ['list-group-item', 'text-danger', 'small'],
             `Error loading hosts: ${err.message}`, hostsContainer);
@@ -107,6 +114,8 @@ function renderHostRow(host) {
     createEl('small', ['d-block', 'text-muted'],
         `${host.event_count} events · ${host.alert_count} alerts`, info);
 
+    renderPollingControl(host, info);
+
     const btnGroup = createEl('div', ['btn-group', 'btn-group-sm', 'flex-shrink-0'], '', item);
 
     const collectBtn = createEl('button', ['btn', 'btn-primary'], 'Collect Logs', btnGroup);
@@ -140,6 +149,131 @@ function renderHostRow(host) {
             notify(err.message, 'danger');
         }
     });
+}
+
+/**
+ * The automatic-collection switch for one host.
+ *
+ * Rendered inline on the row rather than tucked inside the edit dialog:
+ * whether a host is watched on its own is the second most important fact
+ * about it after whether it is reachable, and finding that out should not
+ * take two clicks.
+ */
+function renderPollingControl(host, parent) {
+    const wrap = createEl('div', ['d-flex', 'align-items-center', 'gap-2', 'mt-1'], '', parent);
+
+    const check = createEl('div', ['form-check', 'form-switch', 'mb-0'], '', wrap);
+    const input = createEl('input', ['form-check-input'], '', check);
+    input.type = 'checkbox';
+    input.id = `poll-${host.id}`;
+    input.checked = !!host.polling_enabled;
+    input.title = 'Collect from this host automatically, without pressing Collect';
+
+    const label = createEl('label', ['form-check-label', 'small', 'text-muted'], '', check);
+    label.htmlFor = input.id;
+
+    const interval = createEl('input', ['form-control', 'form-control-sm', 'py-0'], '', wrap);
+    interval.type = 'number';
+    interval.min = '30';
+    interval.step = '30';
+    interval.value = host.poll_interval_effective;
+    interval.style.width = '84px';
+    interval.title = 'Seconds between automatic collections';
+    interval.disabled = !host.polling_enabled;
+
+    createEl('span', ['small', 'text-muted'], 'sec', wrap);
+
+    const describe = () => {
+        if (!input.checked) {
+            label.textContent = 'auto-collect off';
+            return;
+        }
+        label.textContent = host.next_poll
+            ? `auto-collect on \u00b7 next ${formatTime(host.next_poll)}`
+            : 'auto-collect on';
+    };
+    describe();
+
+    const save = async (patch) => {
+        try {
+            const updated = await updateHost(host.id, patch);
+            // Re-read rather than trusting the local copy: the server clamps
+            // the interval and recomputes when the next collection is due.
+            Object.assign(host, updated);
+            interval.value = host.poll_interval_effective;
+            interval.disabled = !host.polling_enabled;
+            describe();
+            notify(
+                host.polling_enabled
+                    ? `"${host.hostname}" is now collected every ${host.poll_interval_effective}s.`
+                    : `Automatic collection is off for "${host.hostname}".`,
+                'info',
+            );
+        } catch (err) {
+            notify(err.message, 'danger');
+            input.checked = !!host.polling_enabled;
+            interval.value = host.poll_interval_effective;
+        }
+    };
+
+    input.addEventListener('change', () => save({ polling_enabled: input.checked }));
+    interval.addEventListener('change', () => save({
+        poll_interval_seconds: Number(interval.value),
+    }));
+}
+
+/**
+ * Whether the background collector is alive, shown above the host list.
+ *
+ * A scheduler that is switched off, or that has died, is indistinguishable
+ * from a quiet network unless it says so - the same ambiguity the USB audit
+ * badge exists to remove elsewhere in this project.
+ */
+async function refreshSchedulerPanel() {
+    const box = document.getElementById('schedulerStatus');
+    if (!box) return;
+    clearContainer(box);
+
+    try {
+        const status = await fetchSchedulerStatus();
+
+        const [cls, text] = status.running
+            ? ['bg-success', 'running']
+            : ['bg-secondary', 'not running'];
+        createEl('span', ['badge', cls, 'me-2'], text, box);
+
+        const facts = [];
+        if (status.running) facts.push(`checks every ${status.tick_seconds}s`);
+        facts.push(`${status.hosts_polled} host(s) on automatic collection`);
+        if (status.next_poll) facts.push(`next ${formatTime(status.next_poll)}`);
+        if (status.collections) facts.push(`${status.collections} collected`);
+        if (status.failures) facts.push(`${status.failures} failed`);
+        createEl('span', ['small', 'text-muted'], facts.join(' \u00b7 '), box);
+
+        if (status.detail) {
+            createEl('div', ['small', 'text-muted', 'mt-1'], status.detail, box);
+        }
+    } catch (err) {
+        createEl('span', ['small', 'text-danger'],
+            `Could not read the scheduler status: ${err.message}`, box);
+    }
+}
+
+async function handleRunSchedulerNow(button) {
+    if (button.disabled) return;
+    button.disabled = true;
+    const original = button.textContent;
+    button.textContent = 'Running...';
+    try {
+        const result = await runSchedulerNow();
+        notify(result.message, result.collected.length ? 'success' : 'info');
+        await refreshHosts();
+    } catch (err) {
+        notify(err.message, 'danger');
+    } finally {
+        button.disabled = false;
+        button.textContent = original;
+    }
 }
 
 /**
@@ -253,6 +387,8 @@ async function handleAddHost(event) {
         collection_method: document.getElementById('hostMethod').value,
         remote_user: document.getElementById('hostRemoteUser').value,
         description: document.getElementById('hostDesc').value,
+        polling_enabled: document.getElementById('hostPolling').checked,
+        poll_interval_seconds: document.getElementById('hostPollInterval').value || null,
     };
 
     try {
@@ -273,6 +409,8 @@ function openHostModal(host) {
     document.getElementById('editHostMethod').value = host.collection_method || '';
     document.getElementById('editHostRemoteUser').value = host.remote_user || '';
     document.getElementById('editHostDesc').value = host.description || '';
+    document.getElementById('editHostPolling').checked = !!host.polling_enabled;
+    document.getElementById('editHostPollInterval').value = host.poll_interval_effective;
     hostModal.show();
 }
 
@@ -285,6 +423,8 @@ async function handleSaveHost() {
         collection_method: document.getElementById('editHostMethod').value,
         remote_user: document.getElementById('editHostRemoteUser').value,
         description: document.getElementById('editHostDesc').value,
+        polling_enabled: document.getElementById('editHostPolling').checked,
+        poll_interval_seconds: document.getElementById('editHostPollInterval').value || null,
     };
 
     try {

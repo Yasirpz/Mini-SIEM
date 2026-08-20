@@ -3,7 +3,7 @@ Database models for Mini-SIEM.
 
 Covers deliverable D-04: schema for users, hosts, threat IPs, events and alerts.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -53,6 +53,18 @@ HOST_STATUSES = (HOST_ONLINE, HOST_DEGRADED, HOST_OFFLINE, HOST_UNKNOWN)
 # A host whose last success is older than this is no longer counted online,
 # even if nothing has failed since — silence is not the same as health.
 HOST_STALE_AFTER_MINUTES = 60
+
+# How often a host is collected from automatically when polling is switched
+# on for it. Five minutes is a compromise: short enough that a USB drive
+# plugged in during a demonstration appears while the observer is still
+# watching, long enough that a lab of hosts is not hammered continuously.
+DEFAULT_POLL_INTERVAL_SECONDS = 300
+
+# The shortest interval a host may be set to. Each poll opens a PowerShell
+# session or an SSH connection, which takes seconds on a real network, so an
+# interval below this would start the next collection before the previous one
+# had finished and achieve nothing but load.
+MIN_POLL_INTERVAL_SECONDS = 30
 
 # Whether a host is actually capable of reporting USB devices, which depends
 # on Plug and Play auditing being switched on there (it is off by default).
@@ -173,6 +185,23 @@ class Host(db.Model):
     # only when someone deliberately alters the audit policy.
     usb_audit_status = db.Column(db.String(20))
 
+    # --- Automatic collection ----------------------------------------------
+    # Whether the background scheduler collects from this host on a timer.
+    # Off by default, and deliberately so: enabling it starts repeated
+    # authenticated connections to a machine, which is not something an
+    # upgrade should begin doing to an existing installation on its own.
+    polling_enabled = db.Column(db.Boolean, default=False, nullable=False,
+                                server_default='0')
+    # Per-host override of DEFAULT_POLL_INTERVAL_SECONDS. NULL means "use the
+    # default", so changing the default later moves every host that never
+    # asked for something specific.
+    poll_interval_seconds = db.Column(db.Integer)
+    # When the scheduler last ran a collection for this host. Kept separate
+    # from last_attempt, which a manual Collect or a connection test also
+    # writes: mixing them would let clicking Test quietly postpone the next
+    # automatic collection.
+    last_poll = db.Column(db.DateTime)
+
     log_sources = db.relationship(
         'LogSource', backref='host', lazy='dynamic', cascade='all, delete-orphan'
     )
@@ -226,6 +255,35 @@ class Host(db.Model):
         # degraded rather than offline so a single blip is not alarming.
         return HOST_DEGRADED if fresh else HOST_OFFLINE
 
+    def effective_poll_interval(self):
+        """
+        How many seconds should pass between automatic collections.
+
+        Falls back to the shared default when the host has no preference, and
+        never returns anything below MIN_POLL_INTERVAL_SECONDS — a value that
+        small can only have arrived from a hand-edited database, and honouring
+        it would put the scheduler into a connect loop.
+        """
+        interval = self.poll_interval_seconds or DEFAULT_POLL_INTERVAL_SECONDS
+        return max(int(interval), MIN_POLL_INTERVAL_SECONDS)
+
+    def next_poll_at(self):
+        """
+        When this host is next due to be collected from, or None if polling
+        is off. A host that has never been polled is due immediately, which
+        is what makes switching the toggle on produce a visible result.
+        """
+        if not self.polling_enabled:
+            return None
+        if self.last_poll is None:
+            return utcnow()
+        return self.last_poll + timedelta(seconds=self.effective_poll_interval())
+
+    def poll_due(self, now=None):
+        """True if the scheduler should collect from this host right now."""
+        due = self.next_poll_at()
+        return due is not None and due <= (now or utcnow())
+
     def record_attempt(self, success, error=None, latency_ms=None):
         """Record the outcome of a collection or connection test."""
         now = utcnow()
@@ -255,6 +313,15 @@ class Host(db.Model):
             'last_error': self.last_error,
             'last_latency_ms': self.last_latency_ms,
             'usb_audit_status': self.usb_audit_status or USB_AUDIT_UNKNOWN,
+            'polling_enabled': bool(self.polling_enabled),
+            # The stored preference and the value actually used are reported
+            # separately. Collapsing them would make the interface write the
+            # current default back as an explicit setting the moment anyone
+            # saved a host, quietly pinning every host to today's default.
+            'poll_interval_seconds': self.poll_interval_seconds,
+            'poll_interval_effective': self.effective_poll_interval(),
+            'last_poll': _fmt(self.last_poll),
+            'next_poll': _fmt(self.next_poll_at()),
         }
 
 

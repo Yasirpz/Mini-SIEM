@@ -78,6 +78,18 @@ class Config:
     # Cap on uploaded sample log files (2 MB is ample for demonstration data).
     MAX_CONTENT_LENGTH = int(os.getenv('MAX_UPLOAD_BYTES', 2 * 1024 * 1024))
 
+    # --- Automatic collection (background scheduler) ---
+    # The scheduler thread polls every host that has polling switched on. It
+    # is on by default because a SIEM that only collects when a button is
+    # pressed is not monitoring anything -- but note that no *host* polls
+    # until it is individually enabled, so a fresh install still does nothing
+    # on its own.
+    SCHEDULER_ENABLED = os.getenv('SCHEDULER_ENABLED', 'true').lower() == 'true'
+    # How often the scheduler wakes to ask which hosts are due. This is not
+    # the collection interval -- that is set per host -- only the resolution
+    # at which due times are noticed.
+    SCHEDULER_TICK_SECONDS = int(os.getenv('SCHEDULER_TICK_SECONDS', 15))
+
 
 class TestConfig(Config):
     """Configuration used by the automated test suite."""
@@ -86,3 +98,8 @@ class TestConfig(Config):
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
     WTF_CSRF_ENABLED = False
     SECRET_KEY = 'test-secret-key'
+    # No background thread during tests. Each test gets its own in-memory
+    # database that is dropped when the fixture ends, and a scheduler tick
+    # arriving mid-teardown would work against a database that no longer
+    # exists. Tests that cover the scheduler drive it explicitly instead.
+    SCHEDULER_ENABLED = False

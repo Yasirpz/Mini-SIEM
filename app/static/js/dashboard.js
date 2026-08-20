@@ -8,7 +8,7 @@ import {
 import {
     fetchHosts, checkHostStatus, triggerLogFetch, fetchAlerts,
     fetchSummary, fetchSeverityStats, fetchRuleStats, fetchTimeline, fetchTopSources,
-    fetchHostStats, fetchEvents,
+    fetchHostStats, fetchEvents, fetchSchedulerStatus,
 } from './api.js';
 
 const hostsContainer = document.getElementById('hostsContainer');
@@ -16,6 +16,15 @@ const alertsBody = document.getElementById('alertsBody');
 const topSources = document.getElementById('topSources');
 const hostOverviewBody = document.getElementById('hostOverviewBody');
 const usbBody = document.getElementById('usbBody');
+const liveStatus = document.getElementById('liveStatus');
+
+// How often the dashboard redraws itself while automatic collection is
+// running. This only re-reads the database that the scheduler is writing to,
+// so it is cheap; it exists because a page that collects on its own but has
+// to be reloaded by hand to show the result is no better than one that does
+// not collect on its own at all.
+const LIVE_REFRESH_MS = 20000;
+let liveTimer = null;
 
 // Chart instances are kept so a refresh updates them instead of stacking
 // a new canvas overlay on top of the old one.
@@ -36,6 +45,63 @@ export async function initDashboard() {
     if (refreshBtn) refreshBtn.addEventListener('click', () => loadAll());
 
     await loadAll();
+    startLiveRefresh();
+}
+
+/**
+ * Keep the page in step with the background collector.
+ *
+ * The interval is only started when something is actually being collected
+ * automatically; a dashboard nobody is feeding does not need to re-query the
+ * server every twenty seconds. The timer is also stopped while the tab is
+ * hidden, so a dashboard left open overnight is not still polling in the
+ * morning.
+ */
+function startLiveRefresh() {
+    if (liveTimer !== null) return;
+
+    liveTimer = window.setInterval(async () => {
+        if (document.hidden) return;
+        await loadAll();
+    }, LIVE_REFRESH_MS);
+
+    document.addEventListener('visibilitychange', () => {
+        // Coming back to the tab should show current data at once rather than
+        // whatever was on screen when it was hidden.
+        if (!document.hidden) loadAll();
+    });
+}
+
+/**
+ * Report whether collection is happening on its own, next to the title.
+ *
+ * Without this the dashboard is ambiguous in exactly the way the rest of this
+ * project tries not to be: a quiet screen could mean nothing has happened, or
+ * that nothing is watching.
+ */
+async function refreshLiveStatus() {
+    if (!liveStatus) return;
+    clearContainer(liveStatus);
+
+    try {
+        const status = await fetchSchedulerStatus();
+
+        if (status.running && status.hosts_polled > 0) {
+            const badge = createEl('span', ['badge', 'bg-success'], 'live', liveStatus);
+            badge.title =
+                `Collecting automatically from ${status.hosts_polled} host(s). `
+                + (status.next_poll ? `Next collection ${formatTime(status.next_poll)}.` : '');
+            return;
+        }
+
+        const badge = createEl('span', ['badge', 'bg-secondary'], 'manual', liveStatus);
+        badge.title = status.detail
+            || 'No host is being collected from automatically. Switch it on per host on the Configuration page.';
+    } catch (err) {
+        // A failure here says nothing about the data on the page, so it is
+        // reported quietly rather than as a page-level error.
+        createEl('span', ['badge', 'bg-secondary'], 'unknown', liveStatus).title = err.message;
+    }
 }
 
 async function loadAll() {
@@ -48,6 +114,7 @@ async function loadAll() {
         refreshHostsList(),
         refreshAlertsTable(),
         refreshUsbDevices(),
+        refreshLiveStatus(),
     ]);
 }
 

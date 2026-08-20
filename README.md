@@ -48,6 +48,10 @@ ideas: log collection, normalization, correlation, and alerting.
   Internal hardware enumerated at boot is filtered out during collection.
   The Monitored Hosts table also shows whether each host actually *audits*
   Plug and Play events, so an empty USB panel is never ambiguous.
+- **Automatic collection** — a background scheduler collects from each
+  enabled host on its own interval, so detection happens whether or not
+  anyone is looking at the screen. Off per host by default; the dashboard
+  reports whether it is running and when the next collection is due.
 - **Rule-based detection engine** — nine rules (R-01 … R-09) with `LOW` /
   `MEDIUM` / `HIGH` severities, re-runnable at any time over stored events.
 - **Dashboard** — summary statistics, Chart.js charts (failure trend,
@@ -149,6 +153,50 @@ off, the password is wrong, or the account lacks permission.
 See [`docs/REAL_WORLD_LAB_SETUP.md`](docs/REAL_WORLD_LAB_SETUP.md) for exact
 setup and demo-day steps.
 
+## Automatic collection
+
+Collection used to begin with someone pressing **Collect**, which meant
+nothing was ever noticed unless a person was already watching. A background
+scheduler now does the same work on a timer.
+
+```
+   scheduler thread            per host
+   ────────────────            ────────
+   wake every 15s   ──▶  is this host due?  ──no──▶ skip
+                              │ yes
+                              ▼
+                     collect_host()  ── the same pipeline the
+                              │        Collect button calls
+                              ▼
+                  archive ▸ store ▸ detect ▸ alert
+```
+
+Switching it on for a host takes one toggle on the **Configuration** page,
+with the interval in seconds beside it (default 300, minimum 30). The
+dashboard shows a **live** badge while collection is running and refreshes
+itself every 20 seconds, so an alert raised by an automatic collection
+appears without anyone reloading the page.
+
+Three design choices are worth naming, because they were choices:
+
+- **No third-party scheduler.** APScheduler or Celery would both do this, and
+  a production deployment should use one. This project has to run offline on
+  a laptop on an isolated lab network, and every extra dependency is one more
+  thing that must be installed before a demonstration can begin, so the
+  standard library's `threading` module is used instead.
+- **One tick, not one job per host.** A job per host would have to be created
+  and cancelled as hosts are added, edited and deleted, and any missed update
+  would leave a thread polling a host that no longer exists. A single tick
+  re-reads the hosts each time, so the scheduler holds no state that can
+  disagree with the database.
+- **Enabled per host, never globally by default.** Turning polling on starts
+  repeated authenticated connections to a real machine. That is not something
+  an upgrade should begin doing on its own, so every host starts with it off.
+
+Collection is incremental — `LogSource.last_fetch` means each poll asks only
+for records written since the previous one — so polling a quiet host costs a
+single round trip and stores nothing.
+
 ## Architecture
 
 ```
@@ -181,6 +229,8 @@ apply rules → store alerts → visualize**.
 | Log Analysis | Parses collected/imported logs and extracts events. | `services/log_analyzer.py`, `services/sample_loader.py` |
 | Alert | Applies the detection rules and assigns severity. | `services/detection.py` |
 | Dashboard | Summary counts, charts and recent activity. | `blueprints/api/stats.py` |
+| Collection | One pipeline shared by the Collect button and the scheduler. | `services/collection.py` |
+| Scheduling | Polls each enabled host on its own interval. | `services/scheduler.py`, `blueprints/api/scheduler.py` |
 
 ## Tools & Technologies
 
@@ -198,10 +248,12 @@ fully offline.
 mini-siem/
 ├── app/
 │   ├── blueprints/
-│   │   ├── api/            # hosts, threat_intel, events, alerts, stats
+│   │   ├── api/            # hosts, threat_intel, events, alerts, stats, scheduler
 │   │   ├── auth.py         # login / logout
 │   │   └── ui.py           # server-rendered pages
 │   ├── services/
+│   │   ├── collection.py   # the collection pipeline, trigger-agnostic
+│   │   ├── scheduler.py    # background automatic collection
 │   │   ├── detection.py    # R-01 .. R-09 rule engine
 │   │   ├── log_analyzer.py # ingestion pipeline
 │   │   ├── log_collector.py# live Linux/Windows collection

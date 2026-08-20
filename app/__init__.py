@@ -60,6 +60,12 @@ def create_app(config_class=Config):
         db.create_all()
         _add_missing_columns()
 
+    # Automatic collection. Started last, so the thread never runs against a
+    # schema that has not finished being brought up to date.
+    from .services.scheduler import init_scheduler
+
+    init_scheduler(app)
+
     return app
 
 
@@ -86,6 +92,12 @@ def _add_missing_columns():
             'last_error': 'VARCHAR(500)',
             'last_latency_ms': 'INTEGER',
             'usb_audit_status': 'VARCHAR(20)',
+            # Automatic collection. The NOT NULL default matters: an existing
+            # installation must come back with polling *off* on every host,
+            # never with a NULL that later reads as enabled.
+            'polling_enabled': 'BOOLEAN NOT NULL DEFAULT 0',
+            'poll_interval_seconds': 'INTEGER',
+            'last_poll': 'DATETIME',
         },
         'events': {
             'device_name': 'VARCHAR(200)',

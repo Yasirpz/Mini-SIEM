@@ -249,13 +249,15 @@ def test_an_unreachable_remote_host_reports_the_reason(auth_client, app, monkeyp
     db.session.add(host)
     db.session.commit()
 
-    from app.blueprints.api import hosts as hosts_api
+    from app.services import collection as collection_service
 
     class Unreachable:
         def security_log_status(self):
             return False, 'WinRM cannot complete the operation.'
 
-    monkeypatch.setattr(hosts_api, '_winrm_for', lambda h: Unreachable())
+    # The collect route delegates to app.services.collection, so the
+    # patch has to land where the pipeline actually looks the name up.
+    monkeypatch.setattr(collection_service, '_winrm_for', lambda h: Unreachable())
 
     response = auth_client.post(f'/api/hosts/{host.id}/logs')
     payload = response.get_json()
@@ -271,7 +273,7 @@ def test_a_linux_host_still_uses_ssh(auth_client, app, monkeypatch):
     db.session.add(host)
     db.session.commit()
 
-    from app.blueprints.api import hosts as hosts_api
+    from app.services import collection as collection_service
 
     called = {}
 
@@ -279,7 +281,9 @@ def test_a_linux_host_still_uses_ssh(auth_client, app, monkeypatch):
         called['host'] = h.hostname
         raise RuntimeError('connection refused')
 
-    monkeypatch.setattr(hosts_api, '_ssh_for', fake_ssh)
+    # The collect route delegates to app.services.collection, so the
+    # patch has to land where the pipeline actually looks the name up.
+    monkeypatch.setattr(collection_service, '_ssh_for', fake_ssh)
 
     response = auth_client.post(f'/api/hosts/{host.id}/logs')
 

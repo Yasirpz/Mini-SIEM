@@ -29,6 +29,12 @@ Enter the username and password created with `scripts/create_admin.py`.
 The landing page after login. It answers "what is the state of my
 environment right now?"
 
+The badge beside the **Security Dashboard** heading says whether anything is
+being collected automatically: **live** means the background collector is
+running and at least one host is enabled, **manual** means every collection
+has to be started by hand. While it is live the page refreshes itself every
+20 seconds, so alerts appear without reloading.
+
 ### Summary cards
 
 | Card | Meaning |
@@ -193,6 +199,41 @@ IP addresses must be unique and valid, and are what identify a host.
 
 Each row shows its event and alert counts. **Delete** removes the host along
 with its events and alerts, and asks for confirmation first.
+
+### Automatic collection
+
+By default a host is only collected from when you press **Collect Logs**. The
+**auto-collect** switch on each host row hands that job to the system: it will
+then collect from that host by itself, every *n* seconds, for as long as
+Mini-SIEM is running.
+
+| Control | Meaning |
+|---|---|
+| The switch | Whether this host is collected from automatically. Off by default. |
+| The number beside it | Seconds between collections. Default 300 (5 minutes), minimum 30. |
+| The label | When the next automatic collection is due. |
+
+Above the host list, an **Automatic collection** panel reports whether the
+background collector is actually running, how many hosts it is watching, and
+when the next collection falls due. **Run now** performs one round immediately
+instead of waiting for the timer — useful when demonstrating, and useful for
+telling "the schedule has not come round yet" apart from "the collection
+itself is failing".
+
+Switching the toggle on makes that host due straight away, so you see a result
+within one tick (about 15 seconds) rather than after a full interval.
+
+Notes worth knowing:
+
+- Collection is **incremental**. Each poll asks only for log records written
+  since the previous one, so polling a quiet host costs one round trip and
+  stores nothing. Short intervals are cheap.
+- A host that fails still waits its full interval before being retried, so an
+  unreachable machine is not hammered.
+- Automatic collection stops when the Flask server stops. It is a running
+  process, not a Windows service.
+- The whole feature can be switched off with `SCHEDULER_ENABLED=false` in
+  `.env`.
 
 ### Threat Intelligence Registry
 

@@ -18,4 +18,4 @@ def handle_validation_error(error):
     return jsonify({'error': str(error)}), 400
 
 
-from . import hosts, threat_intel, events, alerts, stats  # noqa: E402,F401
+from . import hosts, threat_intel, events, alerts, stats, scheduler  # noqa: E402,F401
