@@ -234,19 +234,38 @@ model has no username column. Adding one would be a schema change with a
 backfill for existing rows, and it was judged out of scope for an audit whose
 brief was to preserve the existing objectives.
 
-### 4.7 A collected event can contain a credential
+### 4.7 A credential reached the database, and how it got there
 
-The live database contains 40 `EXPLICIT_CREDENTIALS` (Event 4648) rows whose
-username field reads `SiemLab2026!` — plainly a password typed into a username
-box during testing. Windows recorded it; Mini-SIEM collected it faithfully;
-it is now stored in the events table and will be shown on the Events page.
+**Resolved during the audit, but the underlying lesson stands.**
 
-This is not a parser defect. It is a property of collecting Event 4648 at all,
-and worth knowing before a screen is shown to an audience. Process command
-lines are already excluded from collection for the same reason (see
-`WINDOWS_COLLECT_PROCESS_EVENTS` in `config.py`). **Recommendation:** clear
-those rows before demonstrating, and change any lab password that has been
-typed into the wrong field.
+A lab password had been typed into the **Remote username** field when adding
+a host on the Configuration page. Every WinRM connection attempt then tried to
+authenticate with the password as the account name, which is both why remote
+collection never worked and how the value spread:
+
+| Where it ended up | Why |
+|---|---|
+| `hosts.remote_user` | Entered directly in the Add Host form. |
+| 26 `EXPLICIT_CREDENTIALS` (4648) event rows | Windows logged the attempted logon, recording the bogus account name in `TargetUserName`. Mini-SIEM collected it faithfully, into the username, the message and the raw record. |
+| One Parquet forensic archive | The same events were archived before analysis, as every collected event is. |
+
+All three were cleared: the host field emptied, the event rows deleted, and
+the archive redacted in place. The archive was redacted rather than pruned
+because dropping rows out of a retention file undermines the one thing it is
+for, and its recorded row count would no longer match its contents.
+
+Two points worth keeping:
+
+1. **This is not a parser defect.** Event 4648's `TargetUserName` is whatever
+   the operator typed, and Mini-SIEM recording it accurately is correct
+   behaviour. No heuristic is added to guess whether a username "looks like a
+   password" — it would suppress real evidence to catch an operator error.
+   Process command lines are already excluded from collection for the same
+   underlying reason (see `WINDOWS_COLLECT_PROCESS_EVENTS` in `config.py`).
+
+2. **A credential that has been in a database should be treated as
+   compromised and rotated**, regardless of how thoroughly it was removed
+   afterwards. Deleting rows removes the copy you know about.
 
 ### 4.8 Screenshots were not captured
 
