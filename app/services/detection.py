@@ -133,11 +133,25 @@ class DetectionEngine:
     @staticmethod
     def rule_01_failed_login(events):
         """
-        Group authentication failures by (host, source IP, username) and raise
-        an alert when the count reaches the threshold inside the time window.
+        Group authentication failures by (host, source, username) and raise an
+        alert when the count reaches the threshold inside the time window.
 
         A sliding window is used so that a slow trickle of failures spread over
         hours does not trigger, but a burst does.
+
+        Failures at the machine's own keyboard count. They used to be dropped
+        along with everything else carrying a LOCAL or LOCAL_CONSOLE marker,
+        on the reasoning that those are not attacker addresses -- which is
+        correct for R-03 and R-04, where the whole question is *which remote
+        address* is responsible, and wrong here. Somebody standing at a lab PC
+        trying passwords is exactly what this rule is for, and on a lab bench
+        it is the likeliest form the attack takes. The consequence was that a
+        monitored Windows machine could record twenty-one failed logons and
+        raise nothing at all.
+
+        The marker is used as the grouping key in place of an address, so the
+        rule's shape is unchanged: still one alert per (host, source, user)
+        burst, still the same threshold and window.
         """
         threshold = _config('DETECTION_FAILED_LOGIN_THRESHOLD', DEFAULT_FAILED_LOGIN_THRESHOLD)
         window = timedelta(
@@ -150,9 +164,12 @@ class DetectionEngine:
         for event in events:
             if event.event_type not in FAILURE_EVENT_TYPES:
                 continue
-            if _is_non_routable(event.source_ip):
-                continue
-            groups[(event.host_id, event.source_ip, event.username)].append(event)
+            # Deliberately no _is_non_routable check -- see the docstring.
+            # A missing source is normalised so that failures arriving with
+            # None and with an empty string are not counted as two separate
+            # attackers of one attempt each.
+            source = event.source_ip or 'LOCAL_CONSOLE'
+            groups[(event.host_id, source, event.username)].append(event)
 
         results = []
         for (host_id, source_ip, username), group in groups.items():
@@ -179,9 +196,9 @@ class DetectionEngine:
                         severity=SEVERITY_MEDIUM,
                         alert_type='REPEATED_FAILED_LOGIN',
                         message=(
-                            f"{count} failed login attempts for user '{username or 'unknown'}' "
-                            f"from {source_ip} within "
-                            f"{int(window.total_seconds() // 60)} minutes."
+                            f"{count} failed login attempts for user "
+                            f"'{username or 'unknown'}' {_describe_source(source_ip)} "
+                            f"within {int(window.total_seconds() // 60)} minutes."
                         ),
                         host_id=host_id,
                     )
@@ -636,6 +653,19 @@ class DetectionEngine:
 def _is_non_routable(source_ip):
     """True for local/console markers that should never raise a remote-attacker alert."""
     return source_ip in NON_ROUTABLE_MARKERS
+
+
+def _describe_source(source_ip):
+    """
+    Name where an attempt came from, in a sentence.
+
+    "from LOCAL_CONSOLE" is an internal marker leaking into prose that a
+    supervisor is going to read. The markers describe a place rather than an
+    address, so they are worded as one.
+    """
+    if _is_non_routable(source_ip):
+        return 'at the machine\'s own console'
+    return f'from {source_ip}'
 
 
 def _config(key, default):

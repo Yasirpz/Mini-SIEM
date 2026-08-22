@@ -443,3 +443,109 @@ def test_r09_survives_an_event_with_no_device_name(app, host, base_time):
     counts = DetectionEngine.run()
     assert counts['R-09'] == 1
     assert 'unknown device' in Alert.query.filter_by(rule_id='R-09').one().message
+
+
+# ============================================ R-01 at the machine's own keyboard
+
+def test_r01_counts_failures_typed_at_the_console(app, host, base_time):
+    """
+    Somebody standing at a lab PC trying passwords is what R-01 is for, and on
+    a lab bench it is the likeliest form the attack takes.
+
+    These failures used to be discarded along with everything else carrying a
+    LOCAL_CONSOLE marker, on the reasoning that it is not an attacker address.
+    That is right for R-03 and R-04, where the question is which remote address
+    is responsible, and wrong here: a monitored Windows machine could record
+    twenty-one failed logons and raise nothing at all.
+    """
+    for offset in range(5):
+        make_event(host.id, base_time + timedelta(minutes=offset),
+                   event_type='WIN_FAILED_LOGIN', ip='LOCAL_CONSOLE', user='Administrator')
+    db.session.commit()
+
+    DetectionEngine.run()
+
+    alerts = Alert.query.filter_by(rule_id='R-01').all()
+    assert len(alerts) == 1
+    assert 'Administrator' in alerts[0].message
+
+
+def test_a_console_alert_reads_as_a_place_not_a_marker(app, host, base_time):
+    """A supervisor reads this sentence; 'from LOCAL_CONSOLE' is not a sentence."""
+    for offset in range(5):
+        make_event(host.id, base_time + timedelta(minutes=offset),
+                   event_type='WIN_FAILED_LOGIN', ip='LOCAL_CONSOLE', user='labuser')
+    db.session.commit()
+
+    DetectionEngine.run()
+
+    message = Alert.query.filter_by(rule_id='R-01').one().message
+    assert "at the machine's own console" in message
+    assert 'LOCAL_CONSOLE' not in message
+
+
+def test_console_failures_are_still_kept_out_of_the_threat_registry(app, host, base_time):
+    """
+    Counting them in R-01 must not make them look like a remote attacker
+    anywhere else. LOCAL_CONSOLE is a place, not an address to ban.
+    """
+    for offset in range(5):
+        make_event(host.id, base_time + timedelta(minutes=offset),
+                   event_type='WIN_FAILED_LOGIN', ip='LOCAL_CONSOLE', user='labuser')
+    db.session.commit()
+
+    DetectionEngine.run()
+
+    assert IPRegistry.query.filter_by(ip_address='LOCAL_CONSOLE').count() == 0
+    assert Alert.query.filter_by(rule_id='R-03').count() == 0
+    assert Alert.query.filter_by(rule_id='R-04').count() == 0
+
+
+def test_console_failures_on_two_hosts_do_not_correlate_as_one_attacker(app, two_hosts,
+                                                                        base_time):
+    """
+    R-04 asks which remote address is hitting several machines. Two people
+    mistyping their passwords on two different lab PCs are not one attacker,
+    and treating the shared marker as a shared address would say they were.
+    """
+    first, second = two_hosts
+    for host_entry in (first, second):
+        for offset in range(5):
+            make_event(host_entry.id, base_time + timedelta(minutes=offset),
+                       event_type='WIN_FAILED_LOGIN', ip='LOCAL_CONSOLE', user='labuser')
+    db.session.commit()
+
+    DetectionEngine.run()
+
+    # One R-01 per machine, because each burst is local to its own host...
+    assert Alert.query.filter_by(rule_id='R-01').count() == 2
+    # ...and no cross-host correlation at all.
+    assert Alert.query.filter_by(rule_id='R-04').count() == 0
+
+
+def test_failures_with_no_source_at_all_are_still_counted(app, host, base_time):
+    """
+    A record that arrived without a source address is still a failed login.
+    Normalising the empty value also stops None and '' being read as two
+    different attackers of one attempt each.
+    """
+    for offset in range(5):
+        make_event(host.id, base_time + timedelta(minutes=offset),
+                   event_type='FAILED_LOGIN', ip=None, user='root')
+    db.session.commit()
+
+    DetectionEngine.run()
+
+    assert Alert.query.filter_by(rule_id='R-01').count() == 1
+
+
+def test_a_remote_burst_still_names_the_address(app, host, base_time):
+    """The ordinary case must be unchanged by all of the above."""
+    for offset in range(5):
+        make_event(host.id, base_time + timedelta(minutes=offset), ip=ATTACKER_IP)
+    db.session.commit()
+
+    DetectionEngine.run()
+
+    message = Alert.query.filter_by(rule_id='R-01').one().message
+    assert f'from {ATTACKER_IP}' in message
