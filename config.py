@@ -15,7 +15,11 @@ class Config:
     secrets are never committed to the repository.
     """
 
-    SECRET_KEY = os.getenv('SECRET_KEY', 'dev-key-change-me')
+    # The value used when nothing is configured. It is a *named* constant so
+    # the application can recognise it at startup and say so, rather than
+    # running on a key that is printed in a public repository.
+    DEFAULT_SECRET_KEY = 'dev-key-change-me'
+    SECRET_KEY = os.getenv('SECRET_KEY', DEFAULT_SECRET_KEY)
 
     # Database
     SQLALCHEMY_DATABASE_URI = os.getenv(
