@@ -5,7 +5,7 @@
 **Project ID:** FYCP/2K26/109
 **Program:** BS Computer Science — Final Year
 **Institute:** Institute of Mathematics & Computer Science (IMCS), University of Sindh, Jamshoro
-**Supervisor:** Dr. Asadullah Burdi
+**Supervisor:** Mr. Fiaz Ahmed Memon
 
 | Role | Name | Roll No. |
 |---|---|---|

@@ -11,7 +11,7 @@ BS Computer Science
 | Group Leader | Yasir Parveez | 2K23/CSM/146 |
 | Group Member | Abdul Fatah | 2K23/CSM/03 |
 | Group Member | Mushahid Hussain | 2K23/CSM/100 |
-| Supervisor | Dr. Asadullah Burdi | — |
+| Supervisor | Mr. Fiaz Ahmed Memon | — |
 
 ---
 
@@ -58,8 +58,23 @@ ideas: log collection, normalization, correlation, and alerting.
   the baseline silently rather than alerting on every existing file.
 - **Rule-based detection engine** — ten rules (R-01 … R-10) with `LOW` /
   `MEDIUM` / `HIGH` severities, re-runnable at any time over stored events.
-- **Dashboard** — summary statistics, Chart.js charts (failure trend,
-  severity split, alerts per rule), top attacking IPs, recent USB devices,
+- **MITRE ATT&CK mapping** — every rule is tagged with the ATT&CK technique
+  it corresponds to, and the dashboard reports coverage by tactic in
+  kill-chain order. Rules that have never fired are shown with a count of
+  zero rather than hidden, so the panel reports what the system can *see*,
+  not just what it has caught.
+- **Live dashboard** — the Dashboard, Alerts and Events pages refresh
+  themselves without reloading, at a cadence you choose (2s / 5s / 10s / 30s
+  / off). A single indicator states whether the page is current, and a failed
+  refresh keeps the last good data on screen and dims it instead of blanking
+  the tables.
+- **Pakistan Standard Time** — everything is stored in UTC so hosts in
+  different timezones can be correlated, and displayed as PKT with the zone
+  written into every timestamp (`22 Aug 2026, 01:35:42 PKT`).
+- **Dashboard** — security overview cards, a Collecting → Processing →
+  Detecting → Alerting activity strip built from real counts, Chart.js charts
+  (failure trend, severity split, alerts per rule), top attacking IPs, file
+  integrity findings with their before/after hashes, recent USB devices and
   live host telemetry.
 - **Alert triage** — filter by severity, rule, host and review status;
   acknowledge alerts as they are handled.
@@ -148,7 +163,7 @@ log, read directly  log, read remotely    read over SSH
                             ▼
                Parquet archive + Event table
                             ▼
-              Detection engine (R-01 … R-09)
+              Detection engine (R-01 … R-10)
                             ▼
                      Alerts → Dashboard
 ```
@@ -226,7 +241,7 @@ scheduler now does the same work on a timer.
 ```
    scheduler thread            per host
    ────────────────            ────────
-   wake every 15s   ──▶  is this host due?  ──no──▶ skip
+   wake every 5s    ──▶  is this host due?  ──no──▶ skip
                               │ yes
                               ▼
                      collect_host()  ── the same pipeline the
@@ -236,10 +251,20 @@ scheduler now does the same work on a timer.
 ```
 
 Switching it on for a host takes one toggle on the **Configuration** page,
-with the interval in seconds beside it (default 300, minimum 30). The
-dashboard shows a **live** badge while collection is running and refreshes
-itself every 20 seconds, so an alert raised by an automatic collection
-appears without anyone reloading the page.
+with the interval in seconds beside it (default 5, minimum 5). The dashboard
+shows a **live** badge while collection is running and refreshes itself every
+5 seconds — as do the Alerts and Events pages — so a USB drive plugged into a
+monitored machine, or an alert raised by an automatic collection, appears
+without anyone reloading anything.
+
+Five seconds is a floor on how often a host is *asked*, not a promise about
+how often it answers. Collection is serial and a host is marked as polled
+before the attempt, so a machine that takes eight seconds to respond simply
+becomes due again as soon as it is finished, rather than having two
+collections overlap. File integrity scans deliberately do **not** follow this
+cadence: hashing every watched file every five seconds would cost the
+monitored host far more than a log query and would find nothing extra, so
+scans keep a floor of their own (60 seconds).
 
 Three design choices are worth naming, because they were choices:
 
@@ -276,7 +301,7 @@ Log sources
   Event table (SQLite)
         │
         ▼
-  Detection rule engine (R-01 … R-09)
+  Detection rule engine (R-01 … R-10)
         │
         ▼
   Alert table  ──▶  Web dashboard, alert triage, charts
@@ -361,15 +386,32 @@ flask run
 
 Then open `http://127.0.0.1:5000` and log in.
 
+### A self-contained demonstration
+
+To show the system without touching the real database:
+
+```bash
+python scripts/run_demo.py --rebuild --password <choose one>
+```
+
+This builds a separate `instance/demo.db` with its own account, two monitored
+hosts and an imported authentication log, plus a watched folder where one file
+is genuinely modified after being baselined — so the File Integrity panel
+shows a real finding rather than a fabricated row. It serves on
+`http://127.0.0.1:5002`, a different port from the live instance, so both can
+run at once. Re-run with `--rebuild` to return to the same known state.
+
 ## Running the tests
 
 ```bash
 python -m pytest
 ```
 
-236 tests cover the proposal's test cases TC-01 – TC-08, each of the nine
+341 tests cover the proposal's test cases TC-01 – TC-08, each of the ten
 detection rules individually, all three sample log parsers, USB device
-detection, and input validation.
+detection, file integrity monitoring end to end against real files on disk,
+the ATT&CK rule catalogue, UTC storage across both collectors, and input
+validation.
 
 ## Documentation
 
@@ -377,6 +419,8 @@ detection, and input validation.
 - [User Manual](docs/USER_MANUAL.md) — how to use each module.
 - [Testing Report](docs/TESTING.md) — test cases, results and the demo script.
 - [Sample Logs](samples/README.md) — what each sample file demonstrates.
+- [QA Audit](docs/QA-AUDIT.md) — what was verified, how, and what limits
+  remain.
 
 ## Scope
 

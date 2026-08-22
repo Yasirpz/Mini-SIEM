@@ -17,7 +17,7 @@
 
 **Supervised by**
 
-Dr. Asadullah Burdi
+Mr. Fiaz Ahmed Memon
 
 **Institute of Mathematics & Computer Science**
 **University of Sindh, Jamshoro**
@@ -43,7 +43,7 @@ the degree of Bachelor of Science in Computer Science.
 
 **Supervisor**
 
-Dr. Asadullah Burdi
+Mr. Fiaz Ahmed Memon
 
 Signature: ______________________  Date: ______________
 
@@ -83,7 +83,7 @@ separately in the AI Use Declaration accompanying this submission.
 
 ## Acknowledgements
 
-We wish to thank our supervisor, Dr. Asadullah Burdi, for his guidance
+We wish to thank our supervisor, Mr. Fiaz Ahmed Memon, for his guidance
 throughout this project.
 
 _(Add your own acknowledgements here — faculty, lab staff, family, anyone who

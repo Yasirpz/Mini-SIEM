@@ -2,7 +2,7 @@
 
 **Mini-SIEM** — FYCP/2K26/109
 Institute of Mathematics & Computer Science, University of Sindh, Jamshoro
-Supervisor: Dr. Asadullah Burdi
+Supervisor: Mr. Fiaz Ahmed Memon
 
 ---
 

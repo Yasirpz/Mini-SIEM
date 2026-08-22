@@ -29,20 +29,118 @@ Enter the username and password created with `scripts/create_admin.py`.
 The landing page after login. It answers "what is the state of my
 environment right now?"
 
-The badge beside the **Security Dashboard** heading says whether anything is
-being collected automatically: **live** means the background collector is
-running and at least one host is enabled, **manual** means every collection
-has to be started by hand. While it is live the page refreshes itself every
-20 seconds, so alerts appear without reloading.
+### Is this page still live?
+
+Two different questions get two different answers, in two different places.
+
+At the top right of the page, a pill says whether **this page** is still being
+updated:
+
+| Indicator | Meaning |
+|---|---|
+| ● **Live** | The page fetched fresh data successfully. Beside it is the time of that last successful read. |
+| ● **Updating…** | A refresh is in flight right now. |
+| ● **Connection lost — retrying…** | The last refresh failed. The figures on screen are the last good ones and are dimmed to show they are no longer current. It keeps trying, and returns to Live on its own. |
+| ● **Auto-refresh off** | You turned refreshing off with the picker beside it. Press **Refresh** to update by hand. |
+
+Next to the pill is how often the page refreshes itself: **2s, 5s, 10s, 30s**
+or **Off**. Five seconds is the default. Your choice is remembered, and the
+Alerts and Events pages follow it too. Turning it off is worth doing while you
+work through a long alert table, so the rows stop moving under you.
+
+Refreshing pauses while the tab is in the background — a dashboard left open
+overnight should not spend the night querying a sleeping laptop — and redraws
+immediately when you come back to it. Only the changed parts of the page are
+re-fetched, so a filter you have set or a place you have scrolled to is never
+thrown away.
+
+Below the title, a **Collector** chip answers the other question: whether the
+**server** is collecting on its own. **auto** means the background collector
+is running with at least one host enabled; **manual** means every collection
+has to be started by hand. A page that is Live while the collector says manual
+is working exactly as it should — it means the screen is current, and that
+nothing new is arriving because nothing is being collected.
+
+### What time is that?
+
+Every event, alert and scan is **stored in UTC**, so that a Windows PC in one
+country and a Linux server in another can be placed on the same timeline at
+all. What you see on screen is that stored time converted for display.
+
+The display is **Pakistan Standard Time (PKT, UTC+05:00)**, and every
+timestamp says so:
+
+```
+22 Aug 2026, 01:35:42 PKT
+```
+
+The zone is part of the value on purpose. A time without its zone is not
+evidence — if you copy a row into an incident report you have to be able to
+state when it happened without also having to remember how the dashboard was
+configured.
+
+It is pinned in configuration rather than taken from the browser, so a machine
+whose clock is set to the wrong region cannot silently relabel every event on
+screen. The **Times** chip beside the Collector chip names the zone in use.
+
+To move the display, set an IANA zone name in `.env` and restart Flask:
+
+```
+MINISIEM_DISPLAY_TIMEZONE=Europe/London
+```
+
+Or hand it back to whatever the viewing machine is set to:
+
+```
+MINISIEM_DISPLAY_TIMEZONE=local
+```
+
+Leaving the setting blank keeps Pakistan time.
+
+**If the times look wrong.** Check them against the clock on the machine
+running Mini-SIEM first. Events are recorded on the monitored host's clock and
+converted to UTC there, so a monitored PC whose own clock is hours out will
+produce events that are hours out, and no amount of display configuration will
+fix that — the fix is on that machine. Events collected before this version
+were stored on the monitored machine's wall clock rather than in UTC;
+`python scripts/fix_event_timezones.py` reports what it would change, and
+`--apply` rewrites them.
+
+### Reading severity
+
+Severity carries three signals, not one: a colour, a shape and a word.
+
+| Badge | Means |
+|---|---|
+| ▲ **HIGH** | A serious security event. Look at it now. |
+| ◆ **MEDIUM** | Suspicious activity that needs investigating. |
+| ● **LOW** | Informational; recorded so it can be correlated later. |
+
+The shape and the word matter as much as the colour. On a projector the red
+and the amber wash out into much the same orange, and roughly one man in
+twelve does not separate them reliably in any case.
+
+These are the three levels the project proposal specifies. There is no
+"critical" level above HIGH — HIGH is the top of the scale.
 
 ### Summary cards
 
 | Card | Meaning |
 |---|---|
-| Monitored Hosts | Number of hosts configured for monitoring. |
-| Events Collected | Normalized security events stored in the database. |
+| Monitored Hosts | Hosts configured for monitoring, and how many are online or offline. Online means a collection actually succeeded recently — a host that has never been contacted is neither. |
+| Events Collected | Normalized security events stored, and how many arrived in the last 24 hours. |
+| Authentication | Successful logons against failed ones. |
 | Total Alerts | Alerts raised by the detection rules, and how many are still unreviewed. |
 | High Severity | `HIGH` alerts, and how many IPs are currently banned. |
+| File Integrity | Watched files that stopped matching their baseline, and how many paths are being watched at all. Zero changes means something quite different when zero paths are watched. |
+
+### System activity
+
+A strip of four stages — **Collecting → Processing → Detecting → Alerting**
+— each showing what it actually produced: hosts on automatic collection,
+events stored in the last day, rules that have ever fired, and alerts raised
+in the last day. A stage showing zero is not lit. Nothing here is animated for
+effect; every number is read back out of the database.
 
 ### Charts
 
@@ -50,9 +148,64 @@ has to be started by hand. While it is live the page refreshes itself every
   invalid-user and Windows logon-failure events. A spike identifies the day
   an attack occurred.
 - **Alerts by Severity** — the `LOW` / `MEDIUM` / `HIGH` split.
-- **Alerts by Detection Rule** — which of R-01 … R-09 is firing.
+- **Alerts by Detection Rule** — which of R-01 … R-10 is firing.
 - **Top Attacking Source IPs** — the busiest sources, with their registry
   status, so you can decide what to ban.
+
+### MITRE ATT&CK coverage
+
+This panel answers a question a list of alerts cannot: **which stages of an
+intrusion can this deployment actually see?**
+
+MITRE ATT&CK is the public catalogue of things attackers really do, organised
+into *tactics* (what the attacker is trying to achieve) and *techniques* (how
+they go about it). Each of the ten detection rules is tagged with the
+technique it corresponds to, so an alert can be understood — and checked — by
+somebody who has never seen this project's rule numbering.
+
+The top of the panel shows the tactics in kill-chain order, each with the
+number of alerts seen at that stage. A tactic showing zero stays on screen,
+dimmed: **"watched, nothing seen" and "not watched at all" are different
+answers**, and hiding the first would misrepresent coverage.
+
+The table below lists every rule, what it detects, its ATT&CK technique
+(which links to the public page defining it), its tactic, how many alerts it
+has raised and when it last fired. Rules that have never fired are dimmed
+rather than omitted, for the same reason.
+
+| Rule | Technique | Tactic |
+|---|---|---|
+| R-01 Failed Login | T1110.001 Brute Force: Password Guessing | Credential Access |
+| R-02 Invalid User | T1110 Brute Force | Credential Access |
+| R-03 Threat IP Match | T1133 External Remote Services | Initial Access |
+| R-04 Multiple Host Attempt | T1110.003 Brute Force: Password Spraying | Credential Access |
+| R-05 Audit Log Cleared | T1070.001 Clear Windows Event Logs | Defense Evasion |
+| R-06 Account Created or Deleted | T1136.001 Create Account: Local Account | Persistence |
+| R-07 Privilege Change | T1098 Account Manipulation | Persistence |
+| R-08 Account Lockout | T1110 Brute Force | Credential Access |
+| R-09 External Device Connected | T1091 Replication Through Removable Media | Lateral Movement |
+| R-10 File Integrity Change | T1565.001 Stored Data Manipulation | Impact |
+
+R-02 and R-08 both map to T1110, so the panel counts nine distinct techniques
+across ten rules — counting rules would overstate how much of ATT&CK the
+system covers. The reasoning behind each mapping is recorded in
+`app/rule_catalog.py` and shown as a tooltip on the rule.
+
+### File integrity changes
+
+The ten most recent findings, newest first:
+
+| Column | Meaning |
+|---|---|
+| Time | When the scan noticed, in PKT. |
+| Host | The machine the file lives on. |
+| Change | `modified`, `appeared` or `deleted`. |
+| File | Full path. |
+| Previous hash | First twelve characters of the SHA-256 recorded in the baseline. Hover for the full digest. A file that has just appeared shows a dash — there was nothing to compare against. |
+| New hash | The same for the digest measured in this scan. |
+
+The pair of hashes is the point. "The file was modified" is an assertion; two
+different digests are evidence you can quote.
 
 ### Recent USB Devices
 
@@ -121,8 +274,10 @@ Each host row offers two actions:
 
 ### Recent Alerts
 
-The ten newest alerts, colour-coded by severity. **View all alerts** opens
-the full Alerts page.
+The ten newest alerts, severity first. Each row carries the rule that fired,
+its ATT&CK technique and tactic, the host, the source address and the message.
+**View all alerts** opens the full Alerts page, where the same rows can be
+filtered and acknowledged.
 
 ---
 
@@ -210,7 +365,7 @@ Mini-SIEM is running.
 | Control | Meaning |
 |---|---|
 | The switch | Whether this host is collected from automatically. Off by default. |
-| The number beside it | Seconds between collections. Default 300 (5 minutes), minimum 30. |
+| The number beside it | Seconds between collections. Default 5, minimum 5. |
 | The label | When the next automatic collection is due. |
 
 Above the host list, an **Automatic collection** panel reports whether the
@@ -221,7 +376,13 @@ telling "the schedule has not come round yet" apart from "the collection
 itself is failing".
 
 Switching the toggle on makes that host due straight away, so you see a result
-within one tick (about 15 seconds) rather than after a full interval.
+within one tick (about 5 seconds) rather than after a full interval.
+
+The Dashboard, Alerts and Events pages all redraw themselves every five
+seconds while you are looking at them, so events collected in the background
+appear on screen without you reloading the page. Refreshing pauses while the
+tab is in the background and resumes — with an immediate redraw — when you
+come back to it.
 
 Notes worth knowing:
 
@@ -310,7 +471,29 @@ from and why the entry exists.
 
 ## 6. Recommended demonstration flow
 
-This is the sequence from Appendix B of the proposal.
+### Preparing a clean instance
+
+A demonstration should not be run against the live database, which holds
+whatever the lab actually collected. One command builds a separate one:
+
+```
+python scripts/run_demo.py --rebuild --password <choose one>
+```
+
+It creates `instance/demo.db` (never touching `instance/mini_siem.db`), a
+`demo` account, two monitored hosts with an imported authentication log, and a
+watched folder under `instance/demo_watched/` where one file is genuinely
+modified after being baselined — so the File Integrity panel shows a real
+finding rather than a fabricated row. It then serves on
+<http://127.0.0.1:5002/> — a different port from the real instance, so the
+two can run side by side. Add `--prepare-only` to build without serving.
+
+Re-run it with `--rebuild` at any point to return to the same known state.
+
+### The sequence
+
+This is the sequence from Appendix B of the proposal, extended to cover the
+features added since.
 
 1. **Log in** as the administrator.
 2. **Configuration →** add a host, e.g. `Lab-PC` / `127.0.0.1` / Linux.
@@ -326,7 +509,25 @@ This is the sequence from Appendix B of the proposal.
    re-collecting a single log line.
 8. **Dashboard →** the cards and charts reflect the new totals.
 9. **Filter** the Alerts page to `HIGH` and acknowledge one alert.
-10. **Logout**, then try to open `/` — you are redirected to the login page,
+10. **Dashboard → MITRE ATT&CK coverage.** Point out that Credential Access
+    and Initial Access are lit, and that Persistence and Defense Evasion are
+    not — those rules are watching, and nothing has happened at those stages.
+    This is coverage, not a scoreboard.
+11. **Configuration → Files** on a host. Add a watched path, press **Scan**;
+    it reports a baseline and deliberately no findings. Now edit one of those
+    files outside Mini-SIEM and press **Scan** again: the change is reported
+    with both hashes, R-10 raises an alert, and the dashboard's File Integrity
+    card and panel both move.
+12. **Leave the Dashboard open** on a second screen and generate an event on a
+    monitored machine — a failed logon, or plugging in a USB drive on a host
+    with Plug and Play auditing enabled. Within five seconds the event, the
+    alert and the counts appear **without anybody touching the browser**, and
+    the ● Live indicator's "last updated" time moves.
+13. **Pull the network cable** (or stop Flask). The indicator turns red and
+    reads *Connection lost — retrying…*, the figures on screen dim to show
+    they are no longer current, and nothing is wiped. Restore it and the page
+    returns to Live on its own.
+14. **Logout**, then try to open `/` — you are redirected to the login page,
     demonstrating that protected pages are enforced.
 
 ---

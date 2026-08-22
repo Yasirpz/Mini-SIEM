@@ -25,7 +25,7 @@ BS Computer Science — Final Year
 Institute of Mathematics & Computer Science, University of Sindh, Jamshoro
 
 Yasir Parveez (2K23/CSM/146) · Abdul Fatah (2K23/CSM/03) · Mushahid Hussain (2K23/CSM/100)
-Supervisor: Dr. Asadullah Burdi
+Supervisor: Mr. Fiaz Ahmed Memon
 
 ---
 
@@ -327,7 +327,7 @@ Prepare answers for these. They are the questions most likely to be asked.
 │  Bootstrap · Chart.js│                          │
 ├─────────────────────────────────────────────────┤
 │  Yasir Parveez · Abdul Fatah · Mushahid Hussain │
-│  Supervisor: Dr. Asadullah Burdi                │
+│  Supervisor: Mr. Fiaz Ahmed Memon               │
 │  github.com/Yasirpz/Mini-SIEM                   │
 └─────────────────────────────────────────────────┘
 ```

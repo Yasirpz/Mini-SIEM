@@ -26,7 +26,7 @@ What it prepares, in order:
 Usage:
     python scripts/run_demo.py                     # build and serve
     python scripts/run_demo.py --password secret1234
-    python scripts/run_demo.py --port 5050
+    python scripts/run_demo.py --port 5050         # default is 5002
     python scripts/run_demo.py --rebuild           # start from empty again
     python scripts/run_demo.py --prepare-only      # set it up, do not serve
 
@@ -171,7 +171,10 @@ def prepare_integrity_demo(host, watch_dir):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--password', help='demo account password (generated if omitted)')
-    parser.add_argument('--port', type=int, default=5001, help='port to serve on')
+    # 5002, not 5001: the real instance uses 5001, and a demonstration that
+    # cannot be run alongside the live system is a demonstration you have to
+    # shut the live system down for.
+    parser.add_argument('--port', type=int, default=5002, help='port to serve on')
     parser.add_argument('--rebuild', action='store_true',
                         help='delete the demo database first and build it again')
     parser.add_argument('--prepare-only', action='store_true',
