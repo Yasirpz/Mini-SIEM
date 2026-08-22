@@ -4,8 +4,14 @@
     {
       "name": "mini-siem",
       "runtimeExecutable": "venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "flask", "run", "--port", "5000"],
-      "port": 5000
+      "runtimeArgs": ["-m", "flask", "run", "--port", "5001"],
+      "port": 5001
+    },
+    {
+      "name": "mini-siem-demo",
+      "runtimeExecutable": "venv/Scripts/python.exe",
+      "runtimeArgs": ["scripts/run_demo.py", "--port", "5002"],
+      "port": 5002
     }
   ]
 }

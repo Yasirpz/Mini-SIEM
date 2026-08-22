@@ -11,7 +11,11 @@ function initTheme() {
     const toggleBtn = document.getElementById('themeToggle');
     const htmlEl = document.documentElement;
 
-    const savedTheme = localStorage.getItem('theme') || 'light';
+    // Dark is the default. A security console is read for long stretches in
+    // a room that is usually dimmer than an office, and every colour in the
+    // palette was chosen against the dark ground first. Light remains one
+    // click away, for a projector or a printed screenshot.
+    const savedTheme = localStorage.getItem('theme') || 'dark';
     applyTheme(savedTheme, toggleBtn, htmlEl);
 
     if (!toggleBtn) return;

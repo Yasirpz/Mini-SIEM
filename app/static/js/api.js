@@ -85,6 +85,12 @@ export const createWatchedPath = (hostId, data) =>
 export const removeWatchedPath = (pathId) =>
     request(`/api/watched-paths/${pathId}`, { method: 'DELETE' });
 
+// Recent file integrity findings with their before/after hashes. A dedicated
+// route rather than three filtered /api/events calls, because the events
+// endpoint deliberately does not return raw_log and the hashes live there.
+export const fetchIntegrityChanges = (limit = 10) =>
+    request(`/api/integrity/changes?limit=${limit}`);
+
 export const runIntegrityScan = (hostId) =>
     request(`/api/hosts/${hostId}/integrity-scan`, { method: 'POST' });
 
@@ -168,3 +174,7 @@ export const fetchSeverityStats = () => request('/api/stats/severity');
 export const fetchRuleStats = () => request('/api/stats/rules');
 export const fetchTimeline = (days = 7) => request(`/api/stats/timeline?days=${days}`);
 export const fetchTopSources = (limit = 5) => request(`/api/stats/top-sources?limit=${limit}`);
+// Which MITRE ATT&CK techniques the rule set covers, and which have
+// actually fired. Rules that have never fired are included on purpose --
+// see app/rule_catalog.py.
+export const fetchAttackCoverage = () => request('/api/stats/attack');

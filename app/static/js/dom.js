@@ -51,6 +51,28 @@ export function severityRowClass(severity) {
 }
 
 /**
+ * A severity badge carrying a shape, a word and a colour.
+ *
+ * Colour alone is not enough. Around one man in twelve cannot reliably
+ * separate the red badge from the amber one, a projector in a demonstration
+ * room washes both out, and a printed report has neither. The triangle,
+ * diamond and disc differ in outline, so the ranking survives all three.
+ *
+ * The three levels are LOW, MEDIUM and HIGH as specified in the project
+ * proposal; HIGH is the top of the scale, and nothing here invents a fourth.
+ */
+const SEVERITY_MARKS = { HIGH: '▲', MEDIUM: '◆', LOW: '●' };
+
+export function severityBadge(severity, parent) {
+    const level = SEVERITY_MARKS[severity] ? severity : 'LOW';
+    const badge = createEl('span', ['sev', `sev--${level.toLowerCase()}`], '', parent);
+    createEl('span', ['sev-mark'], SEVERITY_MARKS[level], badge);
+    createEl('span', ['sev-text'], level, badge);
+    badge.title = `${level} severity`;
+    return badge;
+}
+
+/**
  * The timezone every stored time is rendered against.
  *
  * The API always sends UTC. base.html publishes the configured zone in a
@@ -161,6 +183,73 @@ export function displayTimeZoneName() {
     return DISPLAY_TIMEZONE
         || Intl.DateTimeFormat().resolvedOptions().timeZone
         || 'this machine';
+}
+
+/**
+ * Draw the "is this page still being updated?" indicator.
+ *
+ * Every live page shows the same pill, so it is rendered in one place: three
+ * pages that each described a lost connection slightly differently would
+ * teach the reader three things to interpret instead of one.
+ *
+ * `status` is what live.js reports -- see createLiveRefresh. Returns the state
+ * that was applied, so a caller with extra work to do for a particular state
+ * (the dashboard updates its "last updated" clock) can branch on it without
+ * repeating the mapping.
+ */
+const LIVE_STATES = {
+    live: ['live', 'Live'],
+    working: ['working', 'Updating\u2026'],
+    lost: ['lost', 'Connection lost \u2014 retrying\u2026'],
+    off: ['off', 'Auto-refresh off'],
+};
+
+export function renderLivePill(pill, status) {
+    if (!pill) return null;
+
+    const [state, label] = LIVE_STATES[status.state] || LIVE_STATES.working;
+    pill.dataset.state = state;
+
+    const text = pill.querySelector('.live-text');
+    if (text) text.textContent = label;
+
+    return state;
+}
+
+/**
+ * Note that a panel has real content in it.
+ *
+ * Call this after a panel draws rows successfully. It is what lets a later
+ * failure tell "I have nothing and cannot load anything" apart from "I have
+ * last minute's data and could not get this minute's" — two states that look
+ * identical to the code and could not be more different to the reader.
+ */
+export function markLoaded(container) {
+    container.dataset.loaded = 'true';
+    container.removeAttribute('data-stale');
+}
+
+/**
+ * Handle a panel's fetch failure, and say whether it should draw an error.
+ *
+ * Returns false when the panel already had content: the rows stay exactly
+ * where they are and are dimmed instead. Wiping a table of alerts because one
+ * refresh failed would destroy the last known good picture at the moment the
+ * operator most needs it — and the failure is usually a laptop's wifi rather
+ * than anything wrong with the SIEM. The live indicator at the top of the
+ * page is what states the connection is down; the panels only have to stop
+ * pretending their contents are current.
+ *
+ * Returns true when the panel is genuinely empty, in which case the caller
+ * draws its own message: on a first load there is nothing to preserve and
+ * silence would be worse than an error.
+ */
+export function panelFailed(container) {
+    if (container.dataset.loaded === 'true') {
+        container.dataset.stale = 'true';
+        return false;
+    }
+    return true;
 }
 
 /** Show a dismissible message in the shared toast area. */

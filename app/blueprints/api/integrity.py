@@ -1,4 +1,5 @@
 """File Integrity Monitoring API: watched paths, baselines and scanning."""
+import json
 import logging
 
 from flask import jsonify, request
@@ -6,7 +7,13 @@ from flask_login import login_required
 
 from app.blueprints.api import api_bp
 from app.extensions import db
-from app.models import FileBaseline, Host, WatchedPath
+from app.models import (
+    FILE_INTEGRITY_EVENT_TYPES,
+    Event,
+    FileBaseline,
+    Host,
+    WatchedPath,
+)
 from app.services.file_integrity import scan_host
 from app.validators import (
     MAX_DESCRIPTION_LENGTH,
@@ -153,3 +160,65 @@ def run_integrity_scan(host_id):
     host = Host.query.get_or_404(host_id)
     payload, status = scan_host(host)
     return jsonify(payload), status
+
+
+# ------------------------------------------------------------------
+# Recent changes
+# ------------------------------------------------------------------
+
+@api_bp.route('/integrity/changes', methods=['GET'])
+@login_required
+def integrity_changes():
+    """
+    Recent file integrity findings, with the hashes that prove them.
+
+    The dashboard used to build this panel by calling /api/events once per
+    change type and reading only the message, because the events endpoint does
+    not return raw_log -- and it should not, since raw_log holds whole log
+    lines and sending them for every row would make the events table
+    needlessly heavy.
+
+    But a file-integrity finding *is* its two hashes. "Watched file was
+    modified" is an assertion; "a1b2c3... became d4e5f6..." is evidence, and
+    an analyst has to be able to see the difference. So the hashes are parsed
+    out of the stored JSON here, once, and the panel makes one request instead
+    of three.
+    """
+    limit = min(max(request.args.get('limit', 10, type=int), 1), 100)
+
+    events = (
+        Event.query
+        .filter(Event.event_type.in_(FILE_INTEGRITY_EVENT_TYPES))
+        .order_by(Event.timestamp.desc(), Event.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return jsonify({
+        'changes': [_change(event) for event in events],
+        # So the caller can tell "nothing has changed" from "nothing is being
+        # watched" without a second request.
+        'watched_paths': WatchedPath.query.count(),
+    })
+
+
+def _change(event):
+    """One finding, with its hashes lifted out of the stored raw record."""
+    payload = event.to_dict()
+
+    detail = {}
+    if event.raw_log:
+        try:
+            parsed = json.loads(event.raw_log)
+            if isinstance(parsed, dict):
+                detail = parsed
+        except (ValueError, TypeError):
+            # A malformed raw record must not take the panel down. The finding
+            # itself is still real -- it just loses its corroboration.
+            log.debug('Integrity event %s has an unreadable raw record', event.id)
+
+    payload['sha256'] = detail.get('sha256')
+    payload['previous_sha256'] = detail.get('previous_sha256')
+    payload['size_bytes'] = detail.get('size_bytes')
+    payload['previous_size_bytes'] = detail.get('previous_size_bytes')
+    return payload

@@ -465,3 +465,88 @@ def test_a_failing_scan_does_not_cost_the_collection(app, host, watched_dir, mon
     assert collected == ['Lab-PC']
     assert result == ['Lab-PC']
     assert scheduler.integrity_scans == 0
+
+
+# ---------------------------------------------------------------------------
+# The dashboard's view of a finding
+# ---------------------------------------------------------------------------
+#
+# "Watched file was modified" is an assertion; a pair of hashes is evidence.
+# The panel on the dashboard has to be able to show both, and the hashes live
+# in the event's raw record rather than in a column -- so a dedicated endpoint
+# lifts them out. These tests are what stop that endpoint quietly losing them.
+
+def test_recent_changes_carry_both_hashes(auth_client, app, host, watched_dir):
+    scan_host(host)
+    (watched_dir / 'config.ini').write_text('setting=2\n', encoding='utf-8')
+    scan_host(host)
+
+    data = auth_client.get('/api/integrity/changes').get_json()
+
+    assert len(data['changes']) == 1
+    change = data['changes'][0]
+    assert change['event_type'] == EVT_FILE_MODIFIED
+    assert change['file_path'].endswith('config.ini')
+    # Both digests are full SHA-256 values, and they differ -- that pair is
+    # the whole evidence for the finding.
+    assert len(change['sha256']) == 64
+    assert len(change['previous_sha256']) == 64
+    assert change['sha256'] != change['previous_sha256']
+
+
+def test_a_new_file_has_no_previous_hash(auth_client, app, host, watched_dir):
+    """
+    A file that has just appeared never had a baseline, so there is nothing to
+    compare against. Reporting a previous hash here would be inventing one.
+    """
+    scan_host(host)
+    (watched_dir / 'dropped.txt').write_text('new\n', encoding='utf-8')
+    scan_host(host)
+
+    change = auth_client.get('/api/integrity/changes').get_json()['changes'][0]
+
+    assert change['event_type'] == EVT_FILE_ADDED
+    assert change['previous_sha256'] is None
+    assert len(change['sha256']) == 64
+
+
+def test_recent_changes_report_how_many_paths_are_watched(auth_client, app, host,
+                                                          watched_dir):
+    """
+    An empty panel means one thing when forty paths are watched and something
+    else entirely when none are, so the count travels with the (empty) list
+    rather than needing a second request to disambiguate it.
+    """
+    scan_host(host)
+
+    data = auth_client.get('/api/integrity/changes').get_json()
+
+    assert data['changes'] == []
+    assert data['watched_paths'] == 1
+
+
+def test_a_malformed_raw_record_does_not_break_the_panel(auth_client, app, host,
+                                                          watched_dir):
+    """
+    The finding is real even if its corroboration cannot be read back. Losing
+    the hashes is acceptable; losing the row, or the page, is not.
+    """
+    scan_host(host)
+    (watched_dir / 'config.ini').write_text('setting=3\n', encoding='utf-8')
+    scan_host(host)
+
+    event = Event.query.filter_by(event_type=EVT_FILE_MODIFIED).first()
+    event.raw_log = 'not json at all'
+    db.session.commit()
+
+    change = auth_client.get('/api/integrity/changes').get_json()['changes'][0]
+
+    assert change['file_path'].endswith('config.ini')
+    assert change['sha256'] is None
+    assert change['previous_sha256'] is None
+
+
+def test_recent_changes_require_a_session(client):
+    response = client.get('/api/integrity/changes')
+
+    assert response.status_code == 401

@@ -4,87 +4,146 @@
 
 {% block content %}
 <section class="py-4">
-  <div class="container">
+  <div class="container-xl">
 
-    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
-        <div>
-          <div class="d-flex align-items-center gap-2">
-            <h2 class="mb-0">Security Dashboard</h2>
-            <!-- Says whether anything is collecting on its own. An empty
-                 dashboard means something different when nothing is. -->
-            <span id="liveStatus" class="d-inline-flex align-items-center"></span>
-          </div>
-          <small class="text-muted">Live monitoring status, detection summary and recent alerts.</small>
-        </div>
-        <button id="refreshDashboard" class="btn btn-sm btn-outline-secondary">Refresh</button>
+    <!-- ================= PAGE HEADER + LIVE CONTROLS ================= -->
+    <div class="page-head mb-4">
+      <div>
+        <h1 class="page-title mb-1">Security Operations</h1>
+        <p class="page-subtitle mb-0">
+          Centralised monitoring, detection and file integrity for the lab.
+        </p>
+      </div>
+
+      <div class="live-bar">
+        <!-- Whether *this page* is updating itself. Distinct from the
+             collector badge below it, which is about the server. -->
+        <span id="liveIndicator" class="live-pill" data-state="working">
+          <span class="live-dot"></span><span class="live-text">Connecting…</span>
+        </span>
+
+        <span class="live-meta">
+          Last updated <span id="lastUpdated" class="mono">–</span>
+        </span>
+
+        <label class="live-meta" for="refreshInterval">Refresh</label>
+        <select id="refreshInterval" class="form-select form-select-sm live-select"
+                aria-label="How often this page refreshes itself"></select>
+
+        <button id="refreshDashboard" class="btn btn-sm btn-outline-info"
+                title="Fetch everything again now">Refresh</button>
+      </div>
     </div>
 
-    <!-- ================= SUMMARY STAT CARDS (FR-08) ================= -->
+    <!-- Whether the *server* is collecting on its own, and in which timezone
+         times are being read. An empty dashboard means something different
+         when nothing is being collected. -->
+    <div id="liveStatus" class="d-flex align-items-center gap-2 flex-wrap mb-4"></div>
+
+    <!-- ================= SECURITY OVERVIEW (FR-08) ================= -->
+    <h2 class="section-title">Security overview</h2>
     <div class="row g-3 mb-4" id="statCards">
-        <div class="col-6 col-lg">
-          <div class="card shadow-sm h-100 border-start border-4 border-primary">
-            <div class="card-body py-3">
-              <div class="text-muted text-uppercase small">Monitored Hosts</div>
-              <div class="fs-3 fw-bold" data-stat="hosts">–</div>
-              <div class="small text-muted">
-                <span class="text-success" data-stat="hosts_online">0</span> online ·
-                <span class="text-danger" data-stat="hosts_offline">0</span> offline
-              </div>
+        <div class="col-6 col-xl">
+          <div class="metric metric--info h-100">
+            <div class="metric-label">Monitored Hosts</div>
+            <div class="metric-value" data-stat="hosts">–</div>
+            <div class="metric-foot">
+              <span class="dot dot--ok"></span><span data-stat="hosts_online">0</span> online
+              <span class="dot dot--bad ms-2"></span><span data-stat="hosts_offline">0</span> offline
             </div>
           </div>
         </div>
-        <div class="col-6 col-lg">
-          <div class="card shadow-sm h-100 border-start border-4 border-info">
-            <div class="card-body py-3">
-              <div class="text-muted text-uppercase small">Events Collected</div>
-              <div class="fs-3 fw-bold" data-stat="events">–</div>
-              <div class="small text-muted"><span data-stat="events_24h">0</span> in last 24h</div>
+        <div class="col-6 col-xl">
+          <div class="metric metric--accent h-100">
+            <div class="metric-label">Events Collected</div>
+            <div class="metric-value" data-stat="events">–</div>
+            <div class="metric-foot"><span data-stat="events_24h">0</span> in last 24h</div>
+          </div>
+        </div>
+        <div class="col-6 col-xl">
+          <div class="metric metric--warn h-100">
+            <div class="metric-label">Authentication</div>
+            <div class="metric-value">
+              <span class="text-ok" data-stat="successful_logins">–</span><span
+                class="metric-sep">/</span><span class="text-warn" data-stat="failed_logins">–</span>
+            </div>
+            <div class="metric-foot">successful / failed</div>
+          </div>
+        </div>
+        <div class="col-6 col-xl">
+          <div class="metric metric--warn h-100">
+            <div class="metric-label">Total Alerts</div>
+            <div class="metric-value" data-stat="alerts">–</div>
+            <div class="metric-foot"><span data-stat="unacknowledged">0</span> unreviewed</div>
+          </div>
+        </div>
+        <div class="col-6 col-xl">
+          <div class="metric metric--danger h-100">
+            <div class="metric-label">High Severity</div>
+            <div class="metric-value text-bad" data-stat="high_alerts">–</div>
+            <div class="metric-foot"><span data-stat="banned_ips">0</span> banned IPs</div>
+          </div>
+        </div>
+        <div class="col-6 col-xl">
+          <div class="metric metric--fim h-100">
+            <div class="metric-label">File Integrity</div>
+            <div class="metric-value" data-stat="fim_changes">–</div>
+            <!-- Both numbers matter: no changes across no watched paths is
+                 not the same finding as no changes across forty. -->
+            <div class="metric-foot">
+              <span data-stat="fim_changes_24h">0</span> in 24h ·
+              <span data-stat="watched_paths">0</span> paths watched
             </div>
           </div>
         </div>
-        <div class="col-6 col-lg">
-          <div class="card shadow-sm h-100 border-start border-4 border-warning">
-            <div class="card-body py-3">
-              <div class="text-muted text-uppercase small">Authentication</div>
-              <div class="fs-3 fw-bold">
-                <span class="text-success" data-stat="successful_logins">–</span>
-                <span class="text-muted fs-5">/</span>
-                <span class="text-warning" data-stat="failed_logins">–</span>
-              </div>
-              <div class="small text-muted">successful / failed</div>
-            </div>
-          </div>
-        </div>
-        <div class="col-6 col-lg">
-          <div class="card shadow-sm h-100 border-start border-4 border-warning">
-            <div class="card-body py-3">
-              <div class="text-muted text-uppercase small">Total Alerts</div>
-              <div class="fs-3 fw-bold" data-stat="alerts">–</div>
-              <div class="small text-muted"><span data-stat="unacknowledged">0</span> unreviewed</div>
-            </div>
-          </div>
-        </div>
-        <div class="col-6 col-lg">
-          <div class="card shadow-sm h-100 border-start border-4 border-danger">
-            <div class="card-body py-3">
-              <div class="text-muted text-uppercase small">High Severity</div>
-              <div class="fs-3 fw-bold text-danger" data-stat="high_alerts">–</div>
-              <div class="small text-muted"><span data-stat="banned_ips">0</span> banned IPs</div>
-            </div>
-          </div>
-        </div>
+    </div>
+
+    <!-- ================= SYSTEM ACTIVITY PIPELINE ================= -->
+    <!-- What the SIEM is actually doing, stage by stage. Every number here is
+         read from the database, so a stage that is not running shows zero
+         rather than an encouraging animation. -->
+    <div class="panel mb-4">
+      <div class="panel-head">
+        <h6 class="panel-title">System activity</h6>
+        <small class="panel-note">Live counts from the last 24 hours</small>
+      </div>
+      <div class="panel-body">
+        <ol class="pipeline" id="pipelineStrip">
+          <li class="pipeline-step" data-stage="collect">
+            <span class="pipeline-name">Collecting</span>
+            <span class="pipeline-value" data-pipeline="collect">–</span>
+            <span class="pipeline-note" data-pipeline-note="collect">hosts polled</span>
+          </li>
+          <li class="pipeline-step" data-stage="process">
+            <span class="pipeline-name">Processing</span>
+            <span class="pipeline-value" data-pipeline="process">–</span>
+            <span class="pipeline-note" data-pipeline-note="process">events stored (24h)</span>
+          </li>
+          <li class="pipeline-step" data-stage="detect">
+            <span class="pipeline-name">Detecting</span>
+            <span class="pipeline-value" data-pipeline="detect">–</span>
+            <span class="pipeline-note" data-pipeline-note="detect">rules triggered</span>
+          </li>
+          <li class="pipeline-step" data-stage="alert">
+            <span class="pipeline-name">Alerting</span>
+            <span class="pipeline-value" data-pipeline="alert">–</span>
+            <span class="pipeline-note" data-pipeline-note="alert">alerts raised (24h)</span>
+          </li>
+        </ol>
+      </div>
     </div>
 
     <!-- ============= MONITORED HOST OVERVIEW ============= -->
-    <div class="card shadow-sm mb-4">
-      <div class="card-header py-2 d-flex justify-content-between align-items-center">
-        <h6 class="mb-0">Monitored Hosts</h6>
+    <h2 class="section-title">Host monitoring</h2>
+    <div class="panel mb-4">
+      <div class="panel-head">
+        <h6 class="panel-title">Monitored hosts</h6>
         <a href="{{ url_for('ui.config') }}" class="btn btn-sm btn-outline-secondary">Manage</a>
       </div>
-      <div class="card-body p-0">
+      <div class="panel-body p-0">
         <div class="table-responsive">
           <table class="table table-sm table-hover mb-0 align-middle">
-            <thead class="table-light">
+            <thead>
               <tr>
                 <th>Status</th><th>Host</th><th>OS</th>
                 <th>Collection</th><th>USB audit</th>
@@ -100,20 +159,51 @@
       </div>
     </div>
 
+    <!-- ============= MITRE ATT&CK COVERAGE ============= -->
+    <h2 class="section-title">Threat coverage</h2>
+    <div class="panel mb-4">
+      <div class="panel-head">
+        <h6 class="panel-title">MITRE ATT&amp;CK coverage</h6>
+        <small class="panel-note" id="attackSummary">Loading…</small>
+      </div>
+      <div class="panel-body">
+        <!-- Tactics in kill-chain order, so a stage this deployment cannot
+             observe is visible as a gap rather than an absence. -->
+        <div class="tactic-strip" id="tacticStrip"></div>
+      </div>
+      <div class="panel-body p-0 border-top">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0 align-middle">
+            <thead>
+              <tr>
+                <th>Rule</th><th>Detects</th><th>Technique</th>
+                <th>Tactic</th>
+                <th class="text-end">Alerts</th><th>Last seen</th>
+              </tr>
+            </thead>
+            <tbody id="attackBody">
+              <tr><td colspan="6" class="text-center text-muted py-3">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <!-- ================= CHARTS ================= -->
+    <h2 class="section-title">Detection statistics</h2>
     <div class="row g-3 mb-4">
       <div class="col-lg-7">
-        <div class="card shadow-sm h-100">
-          <div class="card-header py-2"><h6 class="mb-0">Authentication Failures (last 7 days)</h6></div>
-          <div class="card-body">
+        <div class="panel h-100">
+          <div class="panel-head"><h6 class="panel-title">Authentication failures (last 7 days)</h6></div>
+          <div class="panel-body">
             <canvas id="timelineChart" height="120"></canvas>
           </div>
         </div>
       </div>
       <div class="col-lg-5">
-        <div class="card shadow-sm h-100">
-          <div class="card-header py-2"><h6 class="mb-0">Alerts by Severity</h6></div>
-          <div class="card-body d-flex align-items-center justify-content-center">
+        <div class="panel h-100">
+          <div class="panel-head"><h6 class="panel-title">Alerts by severity</h6></div>
+          <div class="panel-body d-flex align-items-center justify-content-center">
             <canvas id="severityChart" height="160"></canvas>
           </div>
         </div>
@@ -122,17 +212,17 @@
 
     <div class="row g-3 mb-4">
       <div class="col-lg-7">
-        <div class="card shadow-sm h-100">
-          <div class="card-header py-2"><h6 class="mb-0">Alerts by Detection Rule</h6></div>
-          <div class="card-body">
-            <canvas id="ruleChart" height="130"></canvas>
+        <div class="panel h-100">
+          <div class="panel-head"><h6 class="panel-title">Alerts by detection rule</h6></div>
+          <div class="panel-body">
+            <canvas id="ruleChart" height="150"></canvas>
           </div>
         </div>
       </div>
       <div class="col-lg-5">
-        <div class="card shadow-sm h-100">
-          <div class="card-header py-2"><h6 class="mb-0">Top Attacking Source IPs</h6></div>
-          <div class="card-body p-0">
+        <div class="panel h-100">
+          <div class="panel-head"><h6 class="panel-title">Top attacking source IPs</h6></div>
+          <div class="panel-body p-0">
             <ul class="list-group list-group-flush" id="topSources">
               <li class="list-group-item text-muted small">Loading…</li>
             </ul>
@@ -141,16 +231,44 @@
       </div>
     </div>
 
-    <!-- ============= REMOVABLE MEDIA (Event 6416) ============= -->
-    <div class="card shadow-sm mb-4">
-      <div class="card-header py-2 d-flex justify-content-between align-items-center">
-        <h6 class="mb-0">Recent USB Devices</h6>
-        <small class="text-muted">Requires Plug and Play auditing on the monitored host</small>
+    <!-- ============= FILE INTEGRITY (R-10) ============= -->
+    <h2 class="section-title">File integrity</h2>
+    <div class="panel mb-4">
+      <div class="panel-head">
+        <h6 class="panel-title">File integrity changes</h6>
+        <small class="panel-note">Watched files that stopped matching their recorded SHA-256</small>
       </div>
-      <div class="card-body p-0">
+      <div class="panel-body p-0">
         <div class="table-responsive">
           <table class="table table-sm table-hover mb-0 align-middle">
-            <thead class="table-light">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Host</th>
+                <th>Change</th>
+                <th>File</th>
+                <th>Previous hash</th>
+                <th>New hash</th>
+              </tr>
+            </thead>
+            <tbody id="integrityBody">
+              <tr><td colspan="6" class="text-center text-muted py-3">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============= REMOVABLE MEDIA (Event 6416) ============= -->
+    <div class="panel mb-4">
+      <div class="panel-head">
+        <h6 class="panel-title">Recent USB devices</h6>
+        <small class="panel-note">Requires Plug and Play auditing on the monitored host</small>
+      </div>
+      <div class="panel-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0 align-middle">
+            <thead>
               <tr>
                 <th>Time</th>
                 <th>Host</th>
@@ -166,58 +284,33 @@
       </div>
     </div>
 
-    <!-- ============= FILE INTEGRITY (R-10) ============= -->
-    <div class="card shadow-sm mb-4">
-      <div class="card-header py-2 d-flex justify-content-between align-items-center">
-        <h6 class="mb-0">File Integrity Changes</h6>
-        <small class="text-muted">Watched files that stopped matching their recorded hash</small>
-      </div>
-      <div class="card-body p-0">
-        <div class="table-responsive">
-          <table class="table table-sm table-hover mb-0 align-middle">
-            <thead class="table-light">
-              <tr>
-                <th>Time</th>
-                <th>Host</th>
-                <th>Change</th>
-                <th>File</th>
-              </tr>
-            </thead>
-            <tbody id="integrityBody">
-              <tr><td colspan="4" class="text-center text-muted py-3">Loading…</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- ================= HOST STATUS ================= -->
-    <h4 class="mb-3">Monitored Hosts</h4>
-    <div id="hostsContainer" class="list-group shadow-sm mb-4">
+    <!-- ================= PER-HOST CONTROLS ================= -->
+    <h2 class="section-title">Host controls</h2>
+    <div id="hostsContainer" class="list-group panel mb-4">
         <div class="text-center py-5 text-muted">
-            <div class="spinner-border text-primary mb-2" role="status"></div>
+            <div class="spinner-border text-info mb-2" role="status"></div>
             <p class="mb-0">Loading hosts…</p>
         </div>
     </div>
 
     <!-- ================= RECENT ALERTS ================= -->
-    <div class="d-flex justify-content-between align-items-center mb-3">
-      <h4 class="mb-0 text-danger">Recent Alerts</h4>
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <h2 class="section-title mb-0">Recent alerts</h2>
       <a href="{{ url_for('ui.alerts') }}" class="btn btn-sm btn-outline-danger">View all alerts</a>
     </div>
-    <div class="card shadow-sm">
-      <div class="card-body p-0">
+    <div class="panel">
+      <div class="panel-body p-0">
         <div class="table-responsive">
-          <table class="table table-striped table-hover mb-0 align-middle">
-              <thead class="table-light">
+          <table class="table table-hover mb-0 align-middle">
+              <thead>
                   <tr>
+                      <th>Severity</th>
                       <th>Time</th>
                       <th>Rule</th>
+                      <th>Technique</th>
                       <th>Host</th>
-                      <th>Type</th>
                       <th>Source IP</th>
                       <th>Message</th>
-                      <th>Severity</th>
                   </tr>
               </thead>
               <tbody id="alertsBody">

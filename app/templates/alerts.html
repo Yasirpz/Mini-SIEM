@@ -6,17 +6,23 @@
 <section class="py-4">
   <div class="container">
 
-    <div class="mb-4">
-      <h2 class="mb-0">Alerts</h2>
-      <small class="text-muted">
-        Output of the rule-based detection engine (R-01 – R-09). Use the filters
-        to narrow by severity, rule or host.
-      </small>
+    <div class="page-head mb-4">
+      <div>
+        <h1 class="page-title mb-1">Alerts</h1>
+        <p class="page-subtitle mb-0">
+          Output of the rule-based detection engine. Every alert names the
+          MITRE ATT&amp;CK technique it corresponds to, so it can be understood
+          without reading this project's rule numbering.
+        </p>
+      </div>
+      <span id="liveIndicator" class="live-pill" data-state="working">
+        <span class="live-dot"></span><span class="live-text">Connecting…</span>
+      </span>
     </div>
 
     <!-- ================= FILTERS ================= -->
-    <div class="card shadow-sm mb-4">
-      <div class="card-body">
+    <div class="panel mb-4">
+      <div class="panel-body">
         <div class="row g-2 align-items-end">
           <div class="col-6 col-md-2">
             <label class="form-label form-label-sm mb-1">Severity</label>
@@ -29,17 +35,12 @@
           </div>
           <div class="col-6 col-md-3">
             <label class="form-label form-label-sm mb-1">Rule</label>
+            {# Filled in from the rule catalogue by alerts.js. It used to be
+               written out here by hand, and R-10 was added to the engine
+               without being added to this list -- so file-integrity alerts
+               could not be filtered for at all. #}
             <select id="filterRule" class="form-select form-select-sm">
               <option value="">All rules</option>
-              <option value="R-01">R-01 Failed Login</option>
-              <option value="R-02">R-02 Invalid User</option>
-              <option value="R-03">R-03 Threat IP Match</option>
-              <option value="R-04">R-04 Multiple Host Attempt</option>
-              <option value="R-05">R-05 Audit Log Cleared</option>
-              <option value="R-06">R-06 Account Created/Deleted</option>
-              <option value="R-07">R-07 Privilege Change</option>
-              <option value="R-08">R-08 Account Lockout</option>
-              <option value="R-09">R-09 External Device Connected</option>
             </select>
           </div>
           <div class="col-6 col-md-3">
@@ -72,24 +73,25 @@
     </div>
 
     <!-- ================= ALERT TABLE ================= -->
-    <div class="card shadow-sm">
-      <div class="card-body p-0">
+    <div class="panel">
+      <div class="panel-body p-0">
         <div class="table-responsive">
           <table class="table table-hover mb-0 align-middle">
-            <thead class="table-light">
+            <thead>
               <tr>
+                <th>Severity</th>
                 <th>Time</th>
                 <th>Rule</th>
+                <th>Technique</th>
                 <th>Host</th>
                 <th>Type</th>
                 <th>Source IP</th>
                 <th>Message</th>
-                <th>Severity</th>
                 <th class="text-end">Action</th>
               </tr>
             </thead>
             <tbody id="alertsBody">
-              <tr><td colspan="8" class="text-center py-3 text-muted">Loading…</td></tr>
+              <tr><td colspan="9" class="text-center py-3 text-muted">Loading…</td></tr>
             </tbody>
           </table>
         </div>
