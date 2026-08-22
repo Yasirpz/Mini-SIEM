@@ -3,6 +3,10 @@ TC-07 Dashboard Test (proposal Section 15).
 
 Covers FR-08: the dashboard shows alerts and summary statistics.
 """
+import re
+from pathlib import Path
+
+from app.rule_catalog import RULE_IDS
 from app.models import EVT_USB_DEVICE_CONNECTED, utcnow
 from app.services.log_analyzer import LogAnalyzer
 from app.services.sample_loader import SampleLoader
@@ -51,13 +55,32 @@ def test_rule_breakdown_lists_every_rule(auth_client, host):
     data = auth_client.get('/api/stats/rules').get_json()
 
     # R-01..R-04 detect attacks, R-05..R-08 cover post-compromise activity,
-    # and R-09 covers removable media. This count is an inventory of the rule
-    # set, so it moves whenever a rule is genuinely added.
-    assert len(data['labels']) == 9
+    # R-09 covers removable media and R-10 file integrity. The chart is driven
+    # by the rule catalogue rather than a hand-written list, because R-10 was
+    # once added to the engine and not to the list -- so file-integrity alerts
+    # were stored and then quietly missing from this chart.
+    assert len(data['labels']) == len(RULE_IDS)
+    assert data['rule_ids'] == list(RULE_IDS)
     assert data['labels'][0].startswith('R-01')
-    assert data['labels'][7].startswith('R-08')
     assert data['labels'][8].startswith('R-09')
+    assert data['labels'][9].startswith('R-10')
     assert len(data['counts']) == len(data['labels'])
+
+
+def test_every_rule_the_engine_can_emit_is_in_the_catalogue():
+    """
+    The chart, the alert JSON and the ATT&CK panel all read the catalogue, so
+    a rule the engine can produce but the catalogue does not know would be
+    invisible in every one of them at once.
+    """
+    source = (Path(__file__).resolve().parent.parent
+              / 'app' / 'services' / 'detection.py').read_text(encoding='utf-8')
+    emitted = set(re.findall(r"rule_id='(R-\d\d)'", source))
+
+    assert emitted, 'no rule ids found in detection.py -- did the format change?'
+    assert emitted <= set(RULE_IDS), (
+        f'rules emitted but not catalogued: {sorted(emitted - set(RULE_IDS))}'
+    )
 
 
 def test_timeline_returns_one_point_per_day(auth_client, host):
@@ -95,7 +118,7 @@ def test_dashboard_page_renders(auth_client, host):
     response = auth_client.get('/')
 
     assert response.status_code == 200
-    assert b'Security Dashboard' in response.data
+    assert b'Security Operations' in response.data
     assert b'timelineChart' in response.data
     assert b'severityChart' in response.data
 
@@ -237,5 +260,5 @@ def test_the_dashboard_page_renders_the_usb_panel(auth_client, host):
     response = auth_client.get('/')
 
     assert response.status_code == 200
-    assert b'Recent USB Devices' in response.data
+    assert b'Recent USB devices' in response.data
     assert b'usbBody' in response.data

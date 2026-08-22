@@ -9,6 +9,7 @@ from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from .extensions import db
+from .rule_catalog import get as rule_info
 
 
 def utcnow():
@@ -55,16 +56,25 @@ HOST_STATUSES = (HOST_ONLINE, HOST_DEGRADED, HOST_OFFLINE, HOST_UNKNOWN)
 HOST_STALE_AFTER_MINUTES = 60
 
 # How often a host is collected from automatically when polling is switched
-# on for it. Five minutes is a compromise: short enough that a USB drive
-# plugged in during a demonstration appears while the observer is still
-# watching, long enough that a lab of hosts is not hammered continuously.
-DEFAULT_POLL_INTERVAL_SECONDS = 300
+# on for it. Five seconds, so that plugging a USB drive into a monitored
+# machine shows up on the dashboard while the person who plugged it in is
+# still standing there -- which is the whole point of the panel. Collection is
+# incremental, so a quiet host costs one query that returns nothing rather
+# than a re-read of its log.
+DEFAULT_POLL_INTERVAL_SECONDS = 5
 
-# The shortest interval a host may be set to. Each poll opens a PowerShell
-# session or an SSH connection, which takes seconds on a real network, so an
-# interval below this would start the next collection before the previous one
-# had finished and achieve nothing but load.
-MIN_POLL_INTERVAL_SECONDS = 30
+# The shortest interval a host may be set to.
+#
+# This used to be thirty seconds, on the reasoning that opening a PowerShell
+# or SSH session takes seconds and a shorter interval would start the next
+# collection before the previous one finished. The first half is still true;
+# the conclusion was not. The scheduler is serial and stamps `last_poll`
+# *before* it collects, so a host that takes eight seconds to answer simply
+# becomes due again as soon as it is done -- the interval degrades to "as
+# often as this host can manage" instead of overlapping. Five seconds is
+# therefore a floor on how often we *ask*, not a promise about how often we
+# succeed, and nothing below it is useful because no real host answers faster.
+MIN_POLL_INTERVAL_SECONDS = 5
 
 # Whether a host is actually capable of reporting USB devices, which depends
 # on Plug and Play auditing being switched on there (it is off by default).
@@ -128,6 +138,17 @@ FILE_INTEGRITY_EVENT_TYPES = (EVT_FILE_MODIFIED, EVT_FILE_ADDED, EVT_FILE_DELETE
 # never finishes. Reaching the cap is reported rather than silently truncated,
 # because a partial scan that looks complete is worse than no scan.
 FIM_MAX_FILES_PER_PATH = 500
+
+# The shortest gap between two automatic integrity scans of the same host.
+#
+# Integrity scans ride along with log collection, and log collection now runs
+# as often as every five seconds. Hashing every watched file that often would
+# be a very effective way to make a monitored machine unusable, and it would
+# buy nothing: a file that changes between two scans is still reported by the
+# later one, because the finding comes from comparing against the stored
+# baseline rather than from catching the moment of the change. Reading files
+# is therefore rate-limited independently of reading logs.
+FIM_MIN_SCAN_INTERVAL_SECONDS = 60
 
 # Event types that the detection rules treat as authentication failures.
 # Deliberately unchanged: rule R-01 counts login *attempts*, so a lockout
@@ -478,12 +499,24 @@ class Alert(db.Model):
     acknowledged = db.Column(db.Boolean, default=False, index=True)
 
     def to_dict(self):
+        # The rule's name and its ATT&CK technique travel with the alert
+        # rather than being looked up separately by each page. "R-07" alone
+        # tells an analyst nothing; "Privilege Change / T1098 Account
+        # Manipulation" is something they can act on and something they can
+        # look up outside this project.
+        info = rule_info(self.rule_id)
+
         return {
             'id': self.id,
             'host_id': self.host_id,
             'host_name': self.host.hostname if self.host else 'Unknown Host',
             'timestamp': _fmt(self.timestamp),
             'rule_id': self.rule_id,
+            'rule_name': info.name if info else None,
+            'technique_id': info.technique_id if info else None,
+            'technique_name': info.technique_name if info else None,
+            'technique_url': info.technique_url if info else None,
+            'tactic': info.tactic if info else None,
             'alert_type': self.alert_type,
             'message': self.message,
             'severity': self.severity,
