@@ -15,6 +15,7 @@ import pytest
 from app.extensions import db
 from app.models import (
     DEFAULT_POLL_INTERVAL_SECONDS,
+    FIM_MIN_SCAN_INTERVAL_SECONDS,
     Host,
     MIN_POLL_INTERVAL_SECONDS,
     utcnow,
@@ -220,12 +221,34 @@ def test_polling_can_be_switched_on_through_the_api(auth_client, app):
 def test_an_interval_below_the_minimum_is_rejected(auth_client, app):
     host = _host()
 
+    # Expressed against the constant rather than a literal, so that changing
+    # the floor cannot leave this test asserting the opposite of the rule.
     response = auth_client.put(
-        f'/api/hosts/{host.id}', json={'poll_interval_seconds': 5}
+        f'/api/hosts/{host.id}',
+        json={'poll_interval_seconds': MIN_POLL_INTERVAL_SECONDS - 1},
     )
 
     assert response.status_code == 400
     assert 'at least' in response.get_json()['error']
+
+
+def test_the_shortest_allowed_interval_is_accepted(auth_client, app):
+    """
+    The floor is a permitted value, not the first rejected one.
+
+    This is the setting a demonstration actually uses -- collect as fast as
+    the host can answer -- so it must survive being saved through the API.
+    """
+    host = _host()
+
+    response = auth_client.put(
+        f'/api/hosts/{host.id}',
+        json={'polling_enabled': True,
+              'poll_interval_seconds': MIN_POLL_INTERVAL_SECONDS},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()['poll_interval_effective'] == MIN_POLL_INTERVAL_SECONDS
 
 
 def test_a_nonsense_interval_is_rejected(auth_client, app):
@@ -319,3 +342,61 @@ def test_a_host_with_no_preference_reports_the_default_without_storing_it(auth_c
     assert payload['poll_interval_seconds'] is None
     assert payload['poll_interval_effective'] == DEFAULT_POLL_INTERVAL_SECONDS
     assert host.poll_interval_seconds is None
+
+
+# ---------------------------------------------------------------------------
+# File integrity scans keep their own pace
+# ---------------------------------------------------------------------------
+
+def _scan_calls(monkeypatch, outcome=({'message': 'ok', 'changes': []}, 200)):
+    """Replace the integrity scanner and record which hosts it was given."""
+    calls = []
+
+    def fake_scan(host):
+        calls.append(host.hostname)
+        return outcome
+
+    import app.services.file_integrity as fim_service
+    monkeypatch.setattr(fim_service, 'scan_host', fake_scan)
+    return calls
+
+
+def test_an_integrity_scan_is_not_repeated_on_every_collection(app, scheduler, monkeypatch):
+    """
+    Collection may now run as often as every five seconds. Hashing every
+    watched file at that rate would cost the monitored host far more than the
+    log query does, and would find nothing extra -- a change is reported by
+    comparing against the stored baseline, not by catching the moment it
+    happened. So scans have a floor of their own.
+    """
+    host = _host(polling_enabled=True, poll_interval_seconds=MIN_POLL_INTERVAL_SECONDS,
+                 fim_enabled=True)
+    _collect_calls(monkeypatch)
+    scans = _scan_calls(monkeypatch)
+
+    scheduler.run_once()
+    assert scans == ['Lab-PC'], 'the first collection should scan'
+
+    # Due for collection again immediately, but not for another scan.
+    host.last_poll = utcnow() - timedelta(seconds=MIN_POLL_INTERVAL_SECONDS + 1)
+    host.last_integrity_scan = utcnow()
+    db.session.commit()
+
+    scheduler.run_once()
+    assert scans == ['Lab-PC'], 'the scan should have been skipped, not repeated'
+
+
+def test_an_integrity_scan_resumes_once_its_own_interval_has_passed(app, scheduler, monkeypatch):
+    """The floor delays scans; it must never switch them off."""
+    host = _host(polling_enabled=True, poll_interval_seconds=MIN_POLL_INTERVAL_SECONDS,
+                 fim_enabled=True)
+    _collect_calls(monkeypatch)
+    scans = _scan_calls(monkeypatch)
+
+    host.last_integrity_scan = utcnow() - timedelta(
+        seconds=FIM_MIN_SCAN_INTERVAL_SECONDS + 1
+    )
+    db.session.commit()
+
+    scheduler.run_once()
+    assert scans == ['Lab-PC']

@@ -192,8 +192,8 @@ function renderPollingControl(host, parent) {
 
     const interval = createEl('input', ['form-control', 'form-control-sm', 'py-0'], '', wrap);
     interval.type = 'number';
-    interval.min = '30';
-    interval.step = '30';
+    interval.min = '5';
+    interval.step = '5';
     interval.value = host.poll_interval_effective;
     interval.style.width = '84px';
     interval.title = 'Seconds between automatic collections';
