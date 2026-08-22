@@ -3,7 +3,7 @@
 **Project:** Mini-SIEM — A Web-Based Security Event Monitoring and Threat Detection System
 **Project ID:** FYCP/2K26/109
 **Institute:** Institute of Mathematics & Computer Science, University of Sindh, Jamshoro
-**Supervisor:** Dr. Asadullah Burdi
+**Supervisor:** Mr. Fiaz Ahmed Memon
 
 Deliverable D-11.
 
@@ -18,7 +18,7 @@ student who cannot explain why their own code works as it does gives
 themselves away far more clearly than a declaration ever would.
 
 The template below is deliberately structured so an honest answer is easy to
-give. **Fill it in truthfully, confirm it with Dr. Burdi, and check it
+give. **Fill it in truthfully, confirm it with Mr. Memon, and check it
 against your department's current policy** — institutional rules on AI use in
 final year projects vary and change, and this document cannot substitute for
 that policy.
@@ -177,7 +177,7 @@ We confirm that:
 I confirm that the AI use declared above was discussed with me and is
 consistent with departmental policy.
 
-Supervisor: Dr. Asadullah Burdi
+Supervisor: Mr. Fiaz Ahmed Memon
 
 Signature: ____________________  Date: ______________
 

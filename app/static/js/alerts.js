@@ -3,11 +3,17 @@
  */
 import {
     createEl, clearContainer, emptyRow, notify,
-    severityClass, severityRowClass, formatTime,
+    severityRowClass, severityBadge, formatTime,
+    markLoaded, panelFailed, renderLivePill,
 } from './dom.js';
-import { fetchAlerts, acknowledgeAlert, fetchHosts, runDetection } from './api.js';
+import {
+    fetchAlerts, acknowledgeAlert, fetchHosts, runDetection, fetchAttackCoverage,
+} from './api.js';
+import { createLiveRefresh } from './live.js';
 
 const PAGE_SIZE = 25;
+
+const livePill = document.getElementById('liveIndicator');
 
 const alertsBody = document.getElementById('alertsBody');
 const countLabel = document.getElementById('alertsCount');
@@ -37,8 +43,49 @@ export async function initAlerts() {
     const rerun = document.getElementById('rerunDetection');
     if (rerun) rerun.addEventListener('click', handleRerun);
 
-    await populateHostFilter();
-    await load();
+    await Promise.all([populateHostFilter(), populateRuleFilter()]);
+
+    // Alerts are written by the detection rules that run at the end of every
+    // automatic collection, so this page has to follow the collector too --
+    // an alert nobody is shown until they press reload is not an alert. The
+    // cadence is whatever was last chosen on the dashboard, so the two pages
+    // do not disagree about how live "live" is.
+    //
+    // The first load goes through the controller as well, so the indicator
+    // reports the truth from the moment the page opens rather than sitting on
+    // "Connecting" until the first tick comes round.
+    let drawn = false;
+    const live = createLiveRefresh({
+        refresh: async () => {
+            await load({ quiet: drawn });
+            drawn = true;
+        },
+        onStatus: (status) => renderLivePill(livePill, status),
+    });
+    live.refreshNow();
+}
+
+/**
+ * Fill the rule filter from the catalogue rather than from a list typed into
+ * the template. The hand-written list had gone stale: R-10 existed in the
+ * engine and could not be filtered for here.
+ */
+async function populateRuleFilter() {
+    const select = document.getElementById('filterRule');
+    if (!select) return;
+
+    try {
+        const data = await fetchAttackCoverage();
+        data.techniques.forEach((rule) => {
+            const option = createEl('option', [], `${rule.rule_id} ${rule.name}`, select);
+            option.value = rule.rule_id;
+            option.title = `${rule.summary} (ATT&CK ${rule.technique_id})`;
+        });
+    } catch (err) {
+        // The filter is a convenience; the table below is the point of the
+        // page, so a failure here must not stop it loading.
+        console.error('Could not load the rule list:', err);
+    }
 }
 
 async function populateHostFilter() {
@@ -65,9 +112,12 @@ function currentFilters() {
     };
 }
 
-async function load() {
-    clearContainer(alertsBody);
-    emptyRow(alertsBody, 8, 'Loading…');
+/** Fetch and draw the current page. `quiet` skips the "Loading…" flash. */
+async function load({ quiet = false } = {}) {
+    if (!quiet) {
+        clearContainer(alertsBody);
+        emptyRow(alertsBody, 8, 'Loading…');
+    }
 
     try {
         const data = await fetchAlerts({
@@ -81,8 +131,10 @@ async function load() {
         render(data.alerts);
         updatePager();
     } catch (err) {
-        clearContainer(alertsBody);
-        emptyRow(alertsBody, 8, `Error loading alerts: ${err.message}`);
+        if (panelFailed(alertsBody)) {
+            clearContainer(alertsBody);
+            emptyRow(alertsBody, 9, `Error loading alerts: ${err.message}`);
+        }
     }
 }
 
@@ -90,7 +142,7 @@ function render(alerts) {
     clearContainer(alertsBody);
 
     if (alerts.length === 0) {
-        emptyRow(alertsBody, 8, 'No alerts match these filters.');
+        emptyRow(alertsBody, 9, 'No alerts match these filters.');
         countLabel.textContent = '0 alerts';
         return;
     }
@@ -103,16 +155,34 @@ function render(alerts) {
         if (highlight) row.classList.add(highlight);
         if (alert.acknowledged) row.classList.add('opacity-50');
 
-        createEl('td', ['text-nowrap', 'small'], formatTime(alert.timestamp), row);
-        createEl('td', ['small', 'font-monospace'], alert.rule_id || '-', row);
-        createEl('td', ['fw-bold', 'small'], alert.host_name, row);
-        createEl('td', ['small'], alert.alert_type, row);
-        createEl('td', ['font-monospace', 'small'], alert.source_ip || '-', row);
-        createEl('td', ['small'], alert.message, row);
+        // Severity leads, as on the dashboard: it is what decides whether the
+        // rest of the row is worth reading.
+        severityBadge(alert.severity, createEl('td', [], '', row));
 
-        const badgeCell = createEl('td', [], '', row);
-        createEl('span', ['badge', ...severityClass(alert.severity).split(' ')],
-            alert.severity, badgeCell);
+        createEl('td', ['text-nowrap', 'small'], formatTime(alert.timestamp), row);
+
+        const ruleCell = createEl('td', ['small'], '', row);
+        createEl('div', ['mono', 'fw-semibold'], alert.rule_id || '-', ruleCell);
+        if (alert.rule_name) {
+            createEl('div', ['text-muted', 'tech-name'], alert.rule_name, ruleCell);
+        }
+
+        const techCell = createEl('td', ['small'], '', row);
+        if (alert.technique_id) {
+            const link = createEl('a', ['mono', 'tech-link'], alert.technique_id, techCell);
+            link.href = alert.technique_url;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.title = `${alert.technique_name} (${alert.tactic})`;
+            createEl('div', ['tech-name'], alert.tactic, techCell);
+        } else {
+            createEl('span', ['text-muted'], '-', techCell);
+        }
+
+        createEl('td', ['fw-semibold', 'small'], alert.host_name, row);
+        createEl('td', ['small', 'text-muted'], alert.alert_type, row);
+        createEl('td', ['mono', 'small'], alert.source_ip || '-', row);
+        createEl('td', ['small'], alert.message, row);
 
         const actionCell = createEl('td', ['text-end'], '', row);
         const ackBtn = createEl('button',
@@ -131,6 +201,8 @@ function render(alerts) {
             }
         });
     });
+
+    markLoaded(alertsBody);
 }
 
 function updatePager() {

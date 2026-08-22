@@ -3,12 +3,16 @@
  */
 import {
     createEl, clearContainer, emptyRow, notify,
-    severityClass, severityRowClass, formatTime,
+    severityRowClass, severityBadge, formatTime,
+    displayTimeZoneLabel, displayTimeZoneName,
+    markLoaded, panelFailed, renderLivePill,
 } from './dom.js';
+import { createLiveRefresh, REFRESH_CHOICES, savedInterval } from './live.js';
 import {
     fetchHosts, checkHostStatus, triggerLogFetch, fetchAlerts,
     fetchSummary, fetchSeverityStats, fetchRuleStats, fetchTimeline, fetchTopSources,
-    fetchHostStats, fetchEvents, fetchSchedulerStatus,
+    fetchHostStats, fetchEvents, fetchSchedulerStatus, fetchAttackCoverage,
+    fetchIntegrityChanges,
 } from './api.js';
 
 const hostsContainer = document.getElementById('hostsContainer');
@@ -18,59 +22,166 @@ const hostOverviewBody = document.getElementById('hostOverviewBody');
 const usbBody = document.getElementById('usbBody');
 const integrityBody = document.getElementById('integrityBody');
 const liveStatus = document.getElementById('liveStatus');
+const liveIndicator = document.getElementById('liveIndicator');
+const lastUpdated = document.getElementById('lastUpdated');
+const intervalSelect = document.getElementById('refreshInterval');
+const attackBody = document.getElementById('attackBody');
+const tacticStrip = document.getElementById('tacticStrip');
+const attackSummary = document.getElementById('attackSummary');
 
-// How often the dashboard redraws itself while automatic collection is
-// running. This only re-reads the database that the scheduler is writing to,
-// so it is cheap; it exists because a page that collects on its own but has
-// to be reloaded by hand to show the result is no better than one that does
-// not collect on its own at all.
-const LIVE_REFRESH_MS = 20000;
-let liveTimer = null;
+// The refresh cadence itself lives in live.js, because the Alerts and Events
+// pages have to agree with this one — a dashboard that updated every five
+// seconds while the Events page needed a manual reload would just move the
+// confusion somewhere else.
+let live = null;
 
 // Chart instances are kept so a refresh updates them instead of stacking
 // a new canvas overlay on top of the old one.
 const charts = {};
 
-// Severity palette, reused by both the doughnut and the rule chart.
-const COLORS = {
-    low: '#0dcaf0',
-    medium: '#ffc107',
-    high: '#dc3545',
-    accent: '#0d6efd',
-};
+// Severity palette, reused by both the doughnut and the rule chart. Read from
+// the stylesheet rather than repeated here, so the amber in a chart is the
+// same amber as the badge beside it — two palettes drifting apart is how a
+// dashboard stops being readable at a glance.
+//
+// Re-read rather than captured once. Half of these values change with the
+// theme, and this module is evaluated before main.js has applied the saved
+// one: reading them at import time meant a reader whose saved theme was light
+// got charts drawn with the dark palette — tick labels at roughly 2.5:1
+// against white, and grid lines that were effectively invisible. Toggling the
+// theme afterwards never fixed it either, because nothing re-read them.
+let COLORS = readPalette();
+
+function readPalette() {
+    const style = getComputedStyle(document.documentElement);
+    const token = (name, fallback) =>
+        (style.getPropertyValue(name) || '').trim() || fallback;
+
+    return {
+        low: token('--siem-low', '#38bdf8'),
+        medium: token('--siem-medium', '#f59e0b'),
+        high: token('--siem-high', '#ef4444'),
+        accent: token('--siem-accent', '#22d3ee'),
+        grid: token('--siem-grid', 'rgba(148, 163, 184, 0.18)'),
+        muted: token('--siem-text-muted', '#94a3b8'),
+    };
+}
 
 export async function initDashboard() {
     if (!hostsContainer) return;
 
     const refreshBtn = document.getElementById('refreshDashboard');
-    if (refreshBtn) refreshBtn.addEventListener('click', () => loadAll());
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', () => live && live.refreshNow());
+    }
 
-    await loadAll();
+    buildIntervalPicker();
+    watchThemeChanges();
     startLiveRefresh();
+}
+
+/**
+ * Redraw the charts when the theme changes.
+ *
+ * Everything else on the page is styled in CSS and follows the theme on its
+ * own. A Chart.js canvas cannot: its axis and grid colours are baked into the
+ * chart's options when it is built, so without this the charts keep whichever
+ * palette they were born with.
+ *
+ * Watching the attribute rather than listening to the toggle button keeps
+ * this decoupled from how the theme happens to be set — main.js owns that,
+ * and a second way of changing it later would still be noticed here.
+ */
+function watchThemeChanges() {
+    new MutationObserver(() => {
+        COLORS = readPalette();
+        // Destroyed rather than updated: renderChart only feeds new *data*
+        // into an existing chart, and the colours that need to change live in
+        // its options.
+        Object.keys(charts).forEach((id) => {
+            charts[id].destroy();
+            delete charts[id];
+        });
+        refreshCharts();
+    }).observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['data-bs-theme'],
+    });
 }
 
 /**
  * Keep the page in step with the background collector.
  *
- * The interval is only started when something is actually being collected
- * automatically; a dashboard nobody is feeding does not need to re-query the
- * server every twenty seconds. The timer is also stopped while the tab is
- * hidden, so a dashboard left open overnight is not still polling in the
- * morning.
+ * The dashboard re-reads the database the scheduler is writing to, so a USB
+ * drive plugged into a monitored machine appears without anybody touching the
+ * page. The timer only ever reads — collection itself is the server's job —
+ * which is why running it every few seconds is affordable.
+ *
+ * The controller owns the first load as well as the repeats, so the indicator
+ * moves through the same states on page open as on any later tick and there
+ * is no separate startup path to get wrong.
  */
 function startLiveRefresh() {
-    if (liveTimer !== null) return;
+    live = createLiveRefresh({ refresh: loadAll, onStatus: renderLiveState });
+    live.refreshNow();
+}
 
-    liveTimer = window.setInterval(async () => {
-        if (document.hidden) return;
-        await loadAll();
-    }, LIVE_REFRESH_MS);
+/** Fill the interval picker and remember what the reader chooses. */
+function buildIntervalPicker() {
+    if (!intervalSelect) return;
 
-    document.addEventListener('visibilitychange', () => {
-        // Coming back to the tab should show current data at once rather than
-        // whatever was on screen when it was hidden.
-        if (!document.hidden) loadAll();
+    const current = savedInterval();
+    REFRESH_CHOICES.forEach((choice) => {
+        const option = createEl('option', [], choice.label, intervalSelect);
+        option.value = String(choice.ms);
+        if (choice.ms === current) option.selected = true;
     });
+
+    intervalSelect.addEventListener('change', () => {
+        if (live) live.setInterval(Number(intervalSelect.value));
+    });
+}
+
+/**
+ * Show whether the page is actually being kept up to date.
+ *
+ * A dashboard that has quietly stopped talking to the server looks exactly
+ * like a dashboard where nothing is happening, and on a security console
+ * those are opposite conclusions. A failed refresh therefore says so, keeps
+ * the last good data on screen rather than blanking it, and keeps retrying —
+ * the usual cause is a laptop's wifi, not the SIEM.
+ */
+function renderLiveState(status) {
+    if (!liveIndicator) return;
+
+    // A refresh in flight after a failure must not flicker back to a
+    // reassuring "Updating"; it stays reported as lost until one succeeds.
+    if (status.state === 'working' && live && !live.connected) return;
+
+    // The pill itself is drawn by the shared helper, so this page and the
+    // Alerts and Events pages cannot describe a lost connection differently.
+    renderLivePill(liveIndicator, status);
+
+    if (status.state === 'live') {
+        if (lastUpdated) lastUpdated.textContent = formatTime(toApiTime(status.at));
+        liveIndicator.title = 'This page is refreshing itself automatically.';
+    } else if (status.state === 'lost') {
+        liveIndicator.title = 'The last refresh failed: ' + status.error.message
+            + '. The figures below are the last ones successfully read.';
+    } else if (status.state === 'off') {
+        liveIndicator.title =
+            'Automatic refreshing is off. Use Refresh to update the page.';
+    }
+}
+
+/**
+ * A Date rendered the way the API renders one, so the "last updated" clock
+ * goes through exactly the same timezone conversion as every other time on
+ * the page. Formatting it separately is how that clock ends up disagreeing
+ * with the rows underneath it.
+ */
+function toApiTime(date) {
+    return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
 /**
@@ -86,28 +197,63 @@ async function refreshLiveStatus() {
 
     try {
         const status = await fetchSchedulerStatus();
+        const polled = status.hosts_polled || 0;
 
-        if (status.running && status.hosts_polled > 0) {
-            const badge = createEl('span', ['badge', 'bg-success'], 'live', liveStatus);
-            badge.title =
-                `Collecting automatically from ${status.hosts_polled} host(s). `
-                + (status.next_poll ? `Next collection ${formatTime(status.next_poll)}.` : '');
-            return;
+        if (status.running && polled > 0) {
+            const chip = statusChip('ok', 'Collector', `auto · ${polled} host(s)`);
+            chip.title = `Collecting automatically from ${polled} host(s), `
+                + `checked every ${status.tick_seconds}s.`
+                + (status.next_poll
+                    ? ` Next collection ${formatTime(status.next_poll)}.`
+                    : '');
+        } else {
+            const chip = statusChip('idle', 'Collector', 'manual');
+            chip.title = status.detail
+                || 'No host is being collected from automatically. Switch it on '
+                   + 'per host on the Configuration page.';
         }
 
-        const badge = createEl('span', ['badge', 'bg-secondary'], 'manual', liveStatus);
-        badge.title = status.detail
-            || 'No host is being collected from automatically. Switch it on per host on the Configuration page.';
+        setPipelineStage('collect', polled);
+        addTimeZoneNote();
     } catch (err) {
-        // A failure here says nothing about the data on the page, so it is
-        // reported quietly rather than as a page-level error.
-        createEl('span', ['badge', 'bg-secondary'], 'unknown', liveStatus).title = err.message;
+        // A failure here says nothing about the data already on the page, so
+        // it is reported in its own chip rather than as a page-level error.
+        statusChip('idle', 'Collector', 'unknown').title = err.message;
+        addTimeZoneNote();
     }
+}
+
+/** One labelled chip on the status line under the page title. */
+function statusChip(tone, label, value) {
+    const chip = createEl('span', ['chip', `chip--${tone}`], '', liveStatus);
+    createEl('span', ['chip-label'], label, chip);
+    createEl('span', ['chip-value'], value, chip);
+    return chip;
+}
+
+/**
+ * Name the clock every time on this page is being read against.
+ *
+ * Stored times are UTC, so what appears on screen depends entirely on the
+ * timezone of the machine looking at it. Saying which one turns "why is that
+ * event five hours in the future?" into something the reader can diagnose
+ * themselves rather than a mystery.
+ */
+function addTimeZoneNote() {
+    const label = displayTimeZoneLabel();
+    if (!label) return;
+
+    const chip = statusChip('neutral', 'Times', label);
+    chip.title = `Every time on this page is shown in ${displayTimeZoneName()}. `
+        + 'Times are stored in UTC and converted for display, so they read the '
+        + 'same on any machine.';
 }
 
 async function loadAll() {
     // Run the panels concurrently — one slow panel shouldn't hold up the rest.
-    await Promise.allSettled([
+    // Each panel reports its own failure in its own corner of the page, so one
+    // rejection here is not fatal to the others.
+    const results = await Promise.allSettled([
         refreshStats(),
         refreshCharts(),
         refreshTopSources(),
@@ -116,8 +262,16 @@ async function loadAll() {
         refreshAlertsTable(),
         refreshUsbDevices(),
         refreshIntegrityChanges(),
+        refreshAttackCoverage(),
         refreshLiveStatus(),
     ]);
+
+    // The summary is the cheapest call on the page and the first one issued.
+    // If even that failed, the server is unreachable or the session has
+    // expired, and the live indicator has to say so rather than let the page
+    // sit there looking current. Anything else failing is a panel problem,
+    // which that panel has already reported in its own place.
+    if (results[0].status === 'rejected') throw results[0].reason;
 }
 
 // ======================= HOST OVERVIEW =======================
@@ -125,7 +279,6 @@ async function loadAll() {
 /** Per-host status, so it is obvious which machines are actually reporting. */
 async function refreshHostOverview() {
     if (!hostOverviewBody) return;
-    clearContainer(hostOverviewBody);
 
     const statusStyles = {
         ONLINE: ['bg-success', '🟢 online'],
@@ -144,7 +297,10 @@ async function refreshHostOverview() {
     };
 
     try {
+        // Fetched before anything is cleared, so a refresh that fails leaves
+        // the previous rows on screen instead of emptying the table.
         const hosts = await fetchHostStats();
+        clearContainer(hostOverviewBody);
 
         if (hosts.length === 0) {
             emptyRow(hostOverviewBody, 8, 'No hosts configured yet.');
@@ -173,23 +329,54 @@ async function refreshHostOverview() {
             createEl('td', ['small', 'text-muted'],
                 host.last_success ? formatTime(host.last_success) : 'never', row);
         });
+        markLoaded(hostOverviewBody);
     } catch (err) {
-        emptyRow(hostOverviewBody, 8, 'Could not load host status.');
+        if (panelFailed(hostOverviewBody)) {
+            clearContainer(hostOverviewBody);
+            emptyRow(hostOverviewBody, 8, `Could not load host status: ${err.message}`);
+        }
     }
 }
 
 // ======================= SUMMARY STAT CARDS =======================
 
 async function refreshStats() {
-    try {
-        const stats = await fetchSummary();
-        Object.entries(stats).forEach(([key, value]) => {
-            document.querySelectorAll(`[data-stat="${key}"]`).forEach((el) => {
-                el.textContent = value;
-            });
+    // Deliberately not caught here. This is the call the live indicator uses
+    // to decide whether the server is answering at all, so swallowing its
+    // failure would leave a disconnected dashboard claiming to be live.
+    const stats = await fetchSummary();
+
+    Object.entries(stats).forEach(([key, value]) => {
+        document.querySelectorAll(`[data-stat="${key}"]`).forEach((el) => {
+            el.textContent = value;
         });
-    } catch (err) {
-        console.error('Error loading summary statistics:', err);
+    });
+
+    updatePipeline(stats);
+}
+
+/**
+ * The four pipeline stages, each showing what it actually produced.
+ *
+ * Every figure is read back out of the database, so a stage that is not
+ * running shows a zero. An animation implying work was happening would be
+ * exactly the kind of decoration a security console should not have.
+ */
+function updatePipeline(stats) {
+    setPipelineStage('process', stats.events_24h);
+    setPipelineStage('alert', stats.alerts_24h);
+}
+
+function setPipelineStage(stage, value, note) {
+    const el = document.querySelector('[data-pipeline="' + stage + '"]');
+    if (el) {
+        el.textContent = value;
+        const step = el.closest('.pipeline-step');
+        if (step) step.classList.toggle('is-active', Number(value) > 0);
+    }
+    if (note !== undefined) {
+        const noteEl = document.querySelector('[data-pipeline-note="' + stage + '"]');
+        if (noteEl) noteEl.textContent = note;
     }
 }
 
@@ -197,6 +384,10 @@ async function refreshStats() {
 
 async function refreshCharts() {
     if (typeof Chart === 'undefined') return;
+
+    // Cheap, and it means a chart built before the theme settled still ends
+    // up with the right palette on the next refresh.
+    COLORS = readPalette();
 
     try {
         const [timeline, severity, rules] = await Promise.all([
@@ -213,7 +404,7 @@ async function refreshCharts() {
                     label: 'Authentication failures',
                     data: timeline.counts,
                     borderColor: COLORS.accent,
-                    backgroundColor: 'rgba(13, 110, 253, 0.15)',
+                    backgroundColor: 'rgba(34, 211, 238, 0.14)',
                     fill: true,
                     tension: 0.3,
                     pointRadius: 3,
@@ -235,7 +426,9 @@ async function refreshCharts() {
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: { legend: { position: 'bottom' } },
+                plugins: {
+                    legend: { position: 'bottom', labels: { color: COLORS.muted } },
+                },
             },
         });
 
@@ -258,37 +451,164 @@ async function refreshCharts() {
 }
 
 function baseOptions({ legend = true, indexAxis = 'x' } = {}) {
+    // Grid lines and tick labels are drawn on a canvas, so they do not
+    // inherit the page's colours the way the rest of the dashboard does. On a
+    // dark console the Chart.js defaults come out as near-black on near-black
+    // — legible in a screenshot of the light theme and invisible in use.
     return {
         responsive: true,
         maintainAspectRatio: false,
         indexAxis,
-        plugins: { legend: { display: legend } },
+        plugins: {
+            legend: { display: legend, labels: { color: COLORS.muted } },
+        },
         scales: {
-            x: { grid: { display: false } },
+            x: {
+                grid: { display: false },
+                ticks: { color: COLORS.muted },
+            },
             // Alert counts are whole numbers; fractional ticks would be noise.
-            y: { beginAtZero: true, ticks: { precision: 0 } },
+            y: {
+                beginAtZero: true,
+                ticks: { precision: 0, color: COLORS.muted },
+                grid: { color: COLORS.grid },
+            },
         },
     };
 }
 
+/**
+ * Draw a chart, or update the one already there.
+ *
+ * Destroying and rebuilding every chart was acceptable when the dashboard
+ * redrew itself every twenty seconds. At five it is not: the charts would
+ * visibly blink, and any tooltip the reader was hovering over would be torn
+ * out from under the cursor. Feeding new numbers into the existing chart
+ * animates from the old values instead, which is both smoother and cheaper.
+ */
 function renderChart(canvasId, config) {
     const canvas = document.getElementById(canvasId);
     if (!canvas) return;
 
-    if (charts[canvasId]) {
-        charts[canvasId].destroy();
+    const existing = charts[canvasId];
+
+    // Only a chart of the same kind can be updated in place; anything else
+    // has to be rebuilt, or Chart.js is left holding scales it cannot use.
+    if (existing && existing.config.type === config.type) {
+        existing.data.labels = config.data.labels;
+        config.data.datasets.forEach((dataset, index) => {
+            if (existing.data.datasets[index]) {
+                Object.assign(existing.data.datasets[index], dataset);
+            } else {
+                existing.data.datasets[index] = dataset;
+            }
+        });
+        existing.data.datasets.length = config.data.datasets.length;
+        existing.update();
+        return;
     }
+
+    if (existing) existing.destroy();
     charts[canvasId] = new Chart(canvas, config);
+}
+
+// ======================= ATT&CK COVERAGE =======================
+
+/**
+ * Which adversary behaviours this deployment can see, and which it has seen.
+ *
+ * Rules that have never fired are listed too, greyed rather than omitted. A
+ * panel showing only what had triggered would say nothing about coverage,
+ * which is the question this panel exists to answer: an empty Persistence row
+ * means "watched, nothing seen", and that is a finding.
+ */
+async function refreshAttackCoverage() {
+    if (!attackBody) return;
+
+    try {
+        const data = await fetchAttackCoverage();
+
+        renderTacticStrip(data.tactics);
+        renderTechniqueTable(data.techniques);
+
+        if (attackSummary) {
+            attackSummary.textContent =
+                `${data.techniques_observed} of ${data.techniques_total} techniques `
+                + `observed · ${data.rules_triggered} of ${data.rules_total} rules `
+                + 'have fired';
+        }
+        setPipelineStage('detect', data.rules_triggered);
+        markLoaded(attackBody);
+    } catch (err) {
+        if (panelFailed(attackBody)) {
+            clearContainer(attackBody);
+            emptyRow(attackBody, 6, `Could not load ATT&CK coverage: ${err.message}`);
+            if (attackSummary) attackSummary.textContent = 'Unavailable';
+        }
+    }
+}
+
+function renderTacticStrip(tactics) {
+    if (!tacticStrip) return;
+    clearContainer(tacticStrip);
+
+    tactics.forEach((tactic) => {
+        const card = createEl('div', ['tactic'], '', tacticStrip);
+        if (tactic.alerts > 0) card.classList.add('is-hit');
+
+        createEl('div', ['tactic-name'], tactic.tactic, card);
+        createEl('div', ['tactic-count'], String(tactic.alerts), card);
+        createEl('div', ['tactic-rules'], tactic.rules.join(' · '), card);
+        card.title = tactic.alerts > 0
+            ? `${tactic.alerts} alert(s) from ${tactic.rules.join(', ')}.`
+            : `Covered by ${tactic.rules.join(', ')}, but nothing has been `
+              + 'seen at this stage.';
+    });
+}
+
+function renderTechniqueTable(techniques) {
+    clearContainer(attackBody);
+
+    techniques.forEach((entry) => {
+        const row = createEl('tr', [], '', attackBody);
+        if (entry.alerts === 0) row.classList.add('is-quiet');
+
+        createEl('td', ['mono', 'fw-semibold'], entry.rule_id, row);
+
+        const detects = createEl('td', ['small'], entry.summary, row);
+        detects.title = entry.rationale;
+
+        // The technique identifier links out to MITRE, which is the point of
+        // using their vocabulary: the reader can check the claim rather than
+        // taking this project's word for it.
+        const techCell = createEl('td', ['small'], '', row);
+        const link = createEl('a', ['mono', 'tech-link'], entry.technique_id, techCell);
+        link.href = entry.technique_url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.title = entry.rationale;
+        createEl('div', ['tech-name'], entry.technique_name, techCell);
+
+        createEl('td', ['small'], entry.tactic, row);
+
+        const count = createEl('td', ['text-end', 'fw-semibold'],
+            String(entry.alerts), row);
+        if (entry.alerts > 0) count.classList.add('text-bad');
+
+        createEl('td', ['small', 'text-muted', 'text-nowrap'],
+            entry.last_seen ? formatTime(entry.last_seen) : 'never', row);
+    });
 }
 
 // ======================= TOP SOURCE IPs =======================
 
 async function refreshTopSources() {
     if (!topSources) return;
-    clearContainer(topSources);
 
     try {
         const sources = await fetchTopSources(5);
+        clearContainer(topSources);
+
         if (sources.length === 0) {
             createEl('li', ['list-group-item', 'text-muted', 'small'],
                 'No attacking source IPs recorded yet.', topSources);
@@ -311,66 +631,90 @@ async function refreshTopSources() {
             createEl('span', ['badge', 'bg-light', 'text-dark'],
                 `${source.hits} failures`, item);
         });
+        markLoaded(topSources);
     } catch (err) {
-        console.error('Error loading top sources:', err);
+        if (panelFailed(topSources)) {
+            clearContainer(topSources);
+            createEl('li', ['list-group-item', 'text-muted', 'small'],
+                `Could not load top sources: ${err.message}`, topSources);
+        }
     }
 }
 
 // ======================= REMOVABLE MEDIA =======================
 
 /**
- * Recent file integrity findings.
+ * Recent file integrity findings, with the hashes behind them.
  *
- * Read through the ordinary events endpoint like the USB panel, once per
- * change type, because /api/events filters on a single event_type. Three small
- * queries against an indexed column are cheaper than adding a bespoke route
- * that would duplicate filtering the events API already performs.
+ * "Watched file was modified" is an assertion; a pair of hashes is evidence.
+ * Both are shown, because an analyst writing this up has to be able to quote
+ * the thing that actually changed, and a truncated digest is enough to
+ * compare by eye while the full value stays available on hover.
  */
 async function refreshIntegrityChanges() {
     if (!integrityBody) return;
-    clearContainer(integrityBody);
 
     const labels = {
-        FILE_MODIFIED: ['modified', 'text-bg-danger'],
-        FILE_DELETED: ['deleted', 'text-bg-danger'],
-        FILE_ADDED: ['appeared', 'text-bg-warning'],
+        FILE_MODIFIED: ['modified', 'fim--modified'],
+        FILE_DELETED: ['deleted', 'fim--deleted'],
+        FILE_ADDED: ['appeared', 'fim--added'],
     };
 
     try {
-        const batches = await Promise.all(
-            Object.keys(labels).map((type) => fetchEvents({ event_type: type, limit: 10 })),
-        );
+        const data = await fetchIntegrityChanges(10);
+        clearContainer(integrityBody);
 
-        const rows = batches
-            .flatMap((batch) => batch.events)
-            .sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))
-            .slice(0, 10);
-
-        if (rows.length === 0) {
+        if (data.changes.length === 0) {
             // An empty panel is the healthy state here, but it is also what a
-            // host with nothing watched looks like — so say which.
-            emptyRow(integrityBody, 4,
-                'No integrity changes recorded. Add a watched path on the Configuration page to start checking files.');
+            // host with nothing watched looks like — so say which of the two
+            // this is rather than leaving the reader to guess.
+            emptyRow(integrityBody, 6, data.watched_paths > 0
+                ? `No integrity changes recorded. ${data.watched_paths} path(s) `
+                  + 'are being watched and all files still match their baseline.'
+                : 'Nothing is being watched yet. Add a watched path on the '
+                  + 'Configuration page to start checking files.');
             return;
         }
 
-        rows.forEach((event) => {
+        data.changes.forEach((change) => {
             const row = createEl('tr', [], '', integrityBody);
-            createEl('td', ['text-nowrap', 'small'], formatTime(event.timestamp), row);
-            createEl('td', ['small'], event.host_name, row);
+            createEl('td', ['text-nowrap', 'small'], formatTime(change.timestamp), row);
+            createEl('td', ['small'], change.host_name, row);
 
-            const [label, badgeClass] = labels[event.event_type] || ['changed', 'text-bg-secondary'];
+            const [label, cls] = labels[change.event_type] || ['changed', ''];
             const cell = createEl('td', [], '', row);
-            createEl('span', ['badge', badgeClass], label, cell);
+            createEl('span', ['fim-tag', cls].filter(Boolean), label, cell);
 
-            const fileCell = createEl('td', ['small', 'font-monospace', 'text-truncate'],
-                event.file_path || '-', row);
-            fileCell.style.maxWidth = '320px';
-            fileCell.title = event.message || event.file_path || '';
+            const fileCell = createEl('td', ['small', 'mono', 'text-truncate'],
+                change.file_path || '-', row);
+            fileCell.style.maxWidth = '260px';
+            fileCell.title = change.message || change.file_path || '';
+
+            hashCell(row, change.previous_sha256);
+            hashCell(row, change.sha256);
         });
+        markLoaded(integrityBody);
     } catch (err) {
-        emptyRow(integrityBody, 4, `Could not load integrity changes: ${err.message}`);
+        if (panelFailed(integrityBody)) {
+            clearContainer(integrityBody);
+            emptyRow(integrityBody, 6,
+                `Could not load integrity changes: ${err.message}`);
+        }
     }
+}
+
+/**
+ * One SHA-256, shortened to something a person can compare.
+ *
+ * Twelve characters is roughly what the eye can check in one go, and the full
+ * digest stays on the element's title so nothing is actually lost. A file
+ * that has just appeared has no previous hash, and that is shown as a dash
+ * rather than as an empty cell that could be read as a rendering failure.
+ */
+function hashCell(row, digest) {
+    const cell = createEl('td', ['small', 'mono', 'hash'], digest ? digest.slice(0, 12) : '—', row);
+    cell.title = digest || 'Not applicable for this kind of change.';
+    return cell;
 }
 
 /**
@@ -380,10 +724,10 @@ async function refreshIntegrityChanges() {
  */
 async function refreshUsbDevices() {
     if (!usbBody) return;
-    clearContainer(usbBody);
 
     try {
         const data = await fetchEvents({ event_type: 'USB_DEVICE_CONNECTED', limit: 10 });
+        clearContainer(usbBody);
 
         if (data.events.length === 0) {
             // Absence of USB events is the normal state, and also what a host
@@ -402,27 +746,35 @@ async function refreshUsbDevices() {
             createEl('td', ['small'], event.username || '-', row);
             createEl('td', ['small', 'fw-semibold'], event.device_name || 'Unknown device', row);
         });
+        markLoaded(usbBody);
     } catch (err) {
-        emptyRow(usbBody, 4, `Could not load USB devices: ${err.message}`);
+        if (panelFailed(usbBody)) {
+            clearContainer(usbBody);
+            emptyRow(usbBody, 4, `Could not load USB devices: ${err.message}`);
+        }
     }
 }
 
 // ======================= HOST STATUS =======================
 
 async function refreshHostsList() {
-    clearContainer(hostsContainer);
     try {
         const hosts = await fetchHosts();
+        clearContainer(hostsContainer);
+
         if (hosts.length === 0) {
             createEl('div', ['p-4', 'text-center', 'text-muted'],
                 'No hosts yet. Add one in the Configuration panel.', hostsContainer);
             return;
         }
         hosts.forEach(renderDashboardRow);
+        markLoaded(hostsContainer);
     } catch (err) {
-        console.error(err);
-        createEl('div', ['alert', 'alert-danger', 'mb-0'],
-            `Error loading hosts: ${err.message}`, hostsContainer);
+        if (panelFailed(hostsContainer)) {
+            clearContainer(hostsContainer);
+            createEl('div', ['alert', 'alert-danger', 'mb-0'],
+                `Error loading hosts: ${err.message}`, hostsContainer);
+        }
     }
 }
 
@@ -532,13 +884,14 @@ async function handleFetchLogs(host, btn) {
 
 async function refreshAlertsTable() {
     if (!alertsBody) return;
-    clearContainer(alertsBody);
 
     try {
         const alerts = await fetchAlerts({ limit: 10 });
+        clearContainer(alertsBody);
 
         if (alerts.length === 0) {
-            emptyRow(alertsBody, 7, 'No alerts yet. Import sample logs from the Events page to see detection in action.');
+            emptyRow(alertsBody, 7, 'No alerts yet. Import sample logs from the '
+                + 'Events page to see detection in action.');
             return;
         }
 
@@ -547,19 +900,44 @@ async function refreshAlertsTable() {
             const highlight = severityRowClass(alert.severity);
             if (highlight) row.classList.add(highlight);
 
-            createEl('td', ['text-nowrap', 'small'], formatTime(alert.timestamp), row);
-            createEl('td', ['small', 'font-monospace'], alert.rule_id || '-', row);
-            createEl('td', ['fw-bold'], alert.host_name, row);
-            createEl('td', ['small'], alert.alert_type, row);
-            createEl('td', ['font-monospace', 'small'], alert.source_ip || '-', row);
-            createEl('td', ['small'], alert.message, row);
+            // Severity leads the row. It is the first thing that decides
+            // whether the rest of the row is worth reading, and putting it
+            // last meant scanning past six columns to find out.
+            severityBadge(alert.severity, createEl('td', [], '', row));
 
-            const badgeCell = createEl('td', [], '', row);
-            createEl('span', ['badge', ...severityClass(alert.severity).split(' ')],
-                alert.severity, badgeCell);
+            createEl('td', ['text-nowrap', 'small'], formatTime(alert.timestamp), row);
+
+            const ruleCell = createEl('td', ['small'], '', row);
+            createEl('div', ['mono', 'fw-semibold'], alert.rule_id || '-', ruleCell);
+            if (alert.rule_name) {
+                createEl('div', ['text-muted', 'tech-name'], alert.rule_name, ruleCell);
+            }
+
+            // The ATT&CK technique, so the alert can be understood and
+            // checked by somebody who has never seen this project's rule
+            // numbering.
+            const techCell = createEl('td', ['small'], '', row);
+            if (alert.technique_id) {
+                const link = createEl('a', ['mono', 'tech-link'],
+                    alert.technique_id, techCell);
+                link.href = alert.technique_url;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.title = `${alert.technique_name} (${alert.tactic})`;
+                createEl('div', ['tech-name'], alert.tactic, techCell);
+            } else {
+                createEl('span', ['text-muted'], '-', techCell);
+            }
+
+            createEl('td', ['fw-semibold', 'small'], alert.host_name, row);
+            createEl('td', ['mono', 'small'], alert.source_ip || '-', row);
+            createEl('td', ['small'], alert.message, row);
         });
+        markLoaded(alertsBody);
     } catch (err) {
-        clearContainer(alertsBody);
-        emptyRow(alertsBody, 7, `Error loading alerts: ${err.message}`);
+        if (panelFailed(alertsBody)) {
+            clearContainer(alertsBody);
+            emptyRow(alertsBody, 7, `Error loading alerts: ${err.message}`);
+        }
     }
 }

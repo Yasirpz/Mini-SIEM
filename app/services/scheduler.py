@@ -37,7 +37,7 @@ dead scheduler looks exactly like a quiet network.
 import logging
 import threading
 
-from app.models import Host, utcnow
+from app.models import FIM_MIN_SCAN_INTERVAL_SECONDS, Host, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -187,6 +187,15 @@ class CollectionScheduler:
         """
         if not host.fim_enabled:
             return
+
+        # Log collection may be set as fast as every five seconds. Hashing
+        # files at that rate would cost the monitored host far more than the
+        # log query does and would find nothing extra, so scans keep their own
+        # floor rather than inheriting the collection interval.
+        if host.last_integrity_scan is not None:
+            since = (utcnow() - host.last_integrity_scan).total_seconds()
+            if since < FIM_MIN_SCAN_INTERVAL_SECONDS:
+                return
 
         from app.extensions import db
         from app.services.file_integrity import scan_host

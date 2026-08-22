@@ -5,7 +5,7 @@
 <section class="py-4">
     <div class="container">
         <div class="mb-4">
-          <h2 class="mb-0">Administration Panel</h2>
+          <h1 class="page-title mb-0">Administration</h1>
           <small class="text-muted">
             Manage monitored hosts and the Threat Intelligence IP registry.
           </small>
@@ -15,11 +15,11 @@
         <h4 class="mb-3">Host Management</h4>
         <div class="row mb-5 g-3">
             <div class="col-lg-5">
-                <div class="card shadow-sm h-100">
-                    <div class="card-header bg-dark text-white py-2" data-bs-theme="dark">
-                        <h6 class="mb-0">Add Host</h6>
+                <div class="panel h-100">
+                    <div class="panel-head">
+                        <h6 class="panel-title">Add host</h6>
                     </div>
-                    <div class="card-body">
+                    <div class="panel-body">
                         <form id="hostForm">
                             <div class="mb-2">
                                 <label class="form-label form-label-sm mb-1">Hostname</label>
@@ -70,11 +70,11 @@
                                 <div class="input-group input-group-sm mt-1">
                                     <span class="input-group-text">every</span>
                                     <input type="number" id="hostPollInterval" class="form-control"
-                                           min="30" step="30" placeholder="300">
+                                           min="5" step="5" placeholder="5">
                                     <span class="input-group-text">seconds</span>
                                 </div>
                                 <div class="form-text small">
-                                    Leave blank for the default of 5 minutes. Collection is
+                                    Leave blank for the default of 5 seconds. Collection is
                                     incremental, so polling a quiet host stores nothing.
                                 </div>
                             </div>
@@ -84,15 +84,15 @@
                 </div>
             </div>
             <div class="col-lg-7">
-                <div class="card shadow-sm h-100">
-                    <div class="card-header bg-secondary text-white py-2 d-flex justify-content-between align-items-center" data-bs-theme="dark">
-                        <h6 class="mb-0">Monitored Hosts</h6>
+                <div class="panel h-100">
+                    <div class="panel-head">
+                        <h6 class="panel-title">Monitored hosts</h6>
                         <button id="refreshHostsBtn" class="btn btn-sm btn-outline-light py-0">Refresh</button>
                     </div>
                     <!-- Automatic collection is a property of the whole system,
                          so it is reported once here rather than repeated on
                          every host row. -->
-                    <div class="card-body border-bottom py-2">
+                    <div class="panel-body border-bottom py-2">
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
                                 <div class="small fw-semibold mb-1">Automatic collection</div>
@@ -105,7 +105,7 @@
                             </button>
                         </div>
                     </div>
-                    <div class="card-body p-0">
+                    <div class="panel-body p-0">
                         <div id="hostsListAdmin" class="list-group list-group-flush"
                              style="max-height: 340px; overflow-y: auto;"></div>
                     </div>
@@ -117,11 +117,11 @@
         <h4 class="mb-3">Threat Intelligence Registry</h4>
         <div class="row g-3">
             <div class="col-lg-5">
-                <div class="card shadow-sm h-100">
-                    <div class="card-header bg-dark text-white py-2" data-bs-theme="dark">
-                        <h6 class="mb-0">Add IP Address</h6>
+                <div class="panel h-100">
+                    <div class="panel-head">
+                        <h6 class="panel-title">Add IP address</h6>
                     </div>
-                    <div class="card-body">
+                    <div class="panel-body">
                         <form id="ipForm">
                             <div class="mb-2">
                                 <label class="form-label form-label-sm mb-1">IP address</label>
@@ -152,12 +152,12 @@
                 </div>
             </div>
             <div class="col-lg-7">
-                <div class="card shadow-sm h-100">
-                    <div class="card-header bg-secondary text-white py-2 d-flex justify-content-between align-items-center" data-bs-theme="dark">
-                        <h6 class="mb-0">IP Registry</h6>
+                <div class="panel h-100">
+                    <div class="panel-head">
+                        <h6 class="panel-title">IP registry</h6>
                         <button id="refreshIPsBtn" class="btn btn-sm btn-outline-light py-0">Refresh</button>
                     </div>
-                    <div class="card-body p-0">
+                    <div class="panel-body p-0">
                         <div id="ipListAdmin" class="list-group list-group-flush"
                              style="max-height: 340px; overflow-y: auto;"></div>
                     </div>
@@ -212,7 +212,7 @@
                     <div class="input-group input-group-sm mt-1">
                         <span class="input-group-text">every</span>
                         <input type="number" id="editHostPollInterval" class="form-control"
-                               min="30" step="30">
+                               min="5" step="5">
                         <span class="input-group-text">seconds</span>
                     </div>
                 </div>

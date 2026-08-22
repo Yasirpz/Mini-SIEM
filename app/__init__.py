@@ -1,8 +1,12 @@
+import logging
+
 from flask import Flask, jsonify, request
 
 from config import Config
 
 from .extensions import csrf, db, login_manager, migrate
+
+log = logging.getLogger(__name__)
 
 
 def create_app(config_class=Config):
@@ -49,6 +53,7 @@ def create_app(config_class=Config):
     app.register_blueprint(auth_bp)
     app.register_blueprint(api_bp, url_prefix='/api')
 
+    _warn_about_insecure_settings(app)
     _register_error_handlers(app)
 
     # Make sure the instance folder exists before SQLite tries to open the
@@ -67,6 +72,40 @@ def create_app(config_class=Config):
     init_scheduler(app)
 
     return app
+
+
+def _warn_about_insecure_settings(app):
+    """
+    Say so at startup when the application is running on unsafe defaults.
+
+    Neither of these is worth refusing to start over -- a student following
+    the README for the first time should get a working application, not an
+    error -- but both are worth being told about rather than discovering
+    later. Silence is what turns a development default into a deployed one.
+
+    The session cookie is signed with SECRET_KEY. If that key is the one
+    published in this repository, anyone who knows it can mint a cookie for
+    the administrator account, and every other control in the application is
+    downstream of that.
+    """
+    if app.config.get('TESTING'):
+        return
+
+    if app.config.get('SECRET_KEY') == getattr(
+        Config, 'DEFAULT_SECRET_KEY', 'dev-key-change-me'
+    ):
+        log.warning(
+            'SECRET_KEY is still the built-in default, which is published in '
+            'this repository. Session cookies signed with it can be forged. '
+            'Set SECRET_KEY in .env to a long random value and restart.'
+        )
+
+    if app.debug:
+        log.warning(
+            'Flask is running in debug mode. An unhandled exception exposes '
+            'an interactive Python console in the browser. Do not use this '
+            'with the server reachable from anything but localhost.'
+        )
 
 
 def _add_missing_columns():

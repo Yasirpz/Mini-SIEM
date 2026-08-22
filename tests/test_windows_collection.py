@@ -14,6 +14,7 @@ from app.extensions import db
 from app.models import (
     Event,
     Host,
+    IPRegistry,
     EVT_SUCCESSFUL_LOGIN,
     EVT_USB_DEVICE_CONNECTED,
     EVT_WIN_FAILED_LOGIN,
@@ -528,11 +529,23 @@ def test_four_windows_failures_stay_below_the_threshold(app):
     assert result['alerts']['R-01'] == 0
 
 
-def test_console_failures_do_not_raise_remote_attacker_alerts(app):
+def test_console_failures_raise_r01_but_not_a_remote_attacker_alert(app):
     """
-    Failures typed at the keyboard carry LOCAL_CONSOLE, which the engine
-    treats as non-routable — so a mistyped password on your own laptop does
-    not register as a remote brute-force attempt.
+    Failures typed at the keyboard carry LOCAL_CONSOLE. They count towards
+    R-01 and towards nothing else.
+
+    This test used to assert the opposite — that the console marker suppressed
+    R-01 as well, so that a mistyped password on your own laptop was not read
+    as a brute-force attempt. The intent was right and the rule was too broad.
+    Six failures for one account inside two minutes is not a typing mistake;
+    it is the pattern Windows itself locks an account out for, and on a lab
+    bench somebody at the keyboard is the likeliest attacker there is. The
+    real consequence was measurable: a monitored machine recorded twenty-one
+    failed interactive logons and the dashboard showed no alerts at all.
+
+    What the marker still suppresses is everything that treats a source as a
+    remote address — the threat registry, R-03 and R-04 — because "the
+    console" is a place, not an address anyone can ban.
     """
     host = _windows_host()
     base = utcnow()
@@ -551,8 +564,11 @@ def test_console_failures_do_not_raise_remote_attacker_alerts(app):
 
     result = LogAnalyzer.ingest(events, host.id, origin='COLLECTED')
 
-    assert result['events_stored'] == 6      # still recorded as evidence
-    assert result['alerts']['R-01'] == 0     # but not treated as an attack
+    assert result['events_stored'] == 6
+    assert result['alerts']['R-01'] == 1
+    assert result['alerts']['R-03'] == 0
+    assert result['alerts']['R-04'] == 0
+    assert IPRegistry.query.filter_by(ip_address='LOCAL_CONSOLE').count() == 0
 
 
 def test_mixed_collection_stores_both_outcomes(app):

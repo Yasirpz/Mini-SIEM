@@ -30,7 +30,7 @@ looking at.
 import hashlib
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.extensions import db
@@ -236,7 +236,11 @@ def _hash_local_file(path):
             'path': str(path),
             'sha256': digest,
             'size_bytes': stat.st_size,
-            'modified_at': datetime.fromtimestamp(stat.st_mtime),
+            # st_mtime is epoch seconds; reading it through the local
+            # clock would store a different time than utcnow() does.
+            'modified_at': datetime.fromtimestamp(
+                stat.st_mtime, tz=timezone.utc
+            ).replace(tzinfo=None),
         }
     except (OSError, ValueError) as exc:
         log.debug('Skipping unreadable file %s: %s', path, exc)

@@ -59,7 +59,7 @@ def test_login_accepts_valid_credentials(client, admin):
     )
     assert response.status_code == 200
     assert b'Logged in successfully' in response.data
-    assert b'Security Dashboard' in response.data
+    assert b'Security Operations' in response.data
 
 
 def test_password_is_stored_hashed(admin):

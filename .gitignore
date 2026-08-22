@@ -17,6 +17,10 @@
 .env
 *.env
 .env.*
+# ...except the template, which holds no secrets and is the file the README
+# and INSTALLATION guide tell you to copy. The pattern above was swallowing
+# it, so a fresh clone had nothing to copy from.
+!.env.example
 
 # Local configuration that shouldn't be shared
 *.local

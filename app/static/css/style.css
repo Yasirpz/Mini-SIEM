@@ -1,17 +1,643 @@
 /*
- * Mini-SIEM custom styling.
+ * Mini-SIEM — Security Operations Console styling.
  *
- * Bootstrap 5.3 handles light/dark natively through the data-bs-theme
- * attribute set by main.js, so this file only adds what Bootstrap does not
- * already provide.
+ * Bootstrap 5.3 provides the grid, the components and the light/dark
+ * switching through the data-bs-theme attribute that main.js sets. This file
+ * does two things on top of that: it replaces Bootstrap's default colours
+ * with a palette meant for a security console, and it defines the handful of
+ * components the framework has no equivalent for — the live indicator, the
+ * pipeline strip, the ATT&CK tactic cards, the severity badge.
+ *
+ * Three constraints shaped it.
+ *
+ * No web fonts and no CDN. The dashboard has to work on a machine with no
+ * internet connection, which a demonstration venue may well be, so the type
+ * comes from font stacks the operating system already has.
+ *
+ * Colour is never the only signal. Roughly one man in twelve cannot reliably
+ * separate red from amber, a projector washes both out, and a printed report
+ * has neither — so severity carries a shape and a word as well as a hue, and
+ * host status carries a label.
+ *
+ * Restraint over spectacle. This is a console someone reads for an hour, not
+ * a poster. There is no neon, nothing pulses except the one dot that is
+ * genuinely reporting live activity, and animation is limited to what makes a
+ * state change noticeable rather than decorative.
  */
 
-/* Charts need a bounded height or Chart.js grows them without limit. */
-canvas {
-    max-height: 260px;
+/* ==========================================================================
+   1. PALETTE
+   ==========================================================================
+   Defined as custom properties rather than literal colours so that
+   dashboard.js can read the same values for the Chart.js canvases. A chart
+   drawn from a second, hand-copied palette drifts away from the badges beside
+   it, and then the dashboard stops being readable at a glance.
+   -------------------------------------------------------------------------- */
+
+:root {
+    /* Severity. Blue for informational, amber for suspicious, red for
+       serious — the ordering most people already read correctly. */
+    --siem-low: #38bdf8;
+    --siem-medium: #f59e0b;
+    --siem-high: #ef4444;
+
+    /* Health. Green means a collection actually succeeded recently. */
+    --siem-ok: #22c55e;
+    --siem-warn: #f59e0b;
+    --siem-bad: #ef4444;
+    --siem-idle: #94a3b8;
+
+    /* Cyan is the interface accent: links, focus, the live dot, chart lines.
+       Kept distinct from every severity colour so that "this is interactive"
+       is never confused with "this is a warning". */
+    --siem-accent: #06b6d4;
+
+    --siem-radius: 10px;
+    --siem-radius-sm: 6px;
+
+    /* No downloads: both stacks are resolved from fonts Windows, macOS and
+       most Linux desktops already ship. */
+    --siem-font: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system,
+        'Helvetica Neue', Arial, sans-serif;
+    --siem-mono: ui-monospace, 'Cascadia Mono', 'Cascadia Code', Consolas,
+        'SF Mono', 'DejaVu Sans Mono', monospace;
 }
 
-/* Keep long log messages from stretching a table beyond the viewport. */
+/* --- Dark: the working theme ------------------------------------------- */
+[data-bs-theme='dark'] {
+    --siem-bg: #0b1120;
+    --siem-surface: #111a2e;
+    --siem-surface-2: #16223c;
+    --siem-border: #22304d;
+    --siem-text: #e2e8f0;
+    --siem-text-muted: #94a3b8;
+    --siem-grid: rgba(148, 163, 184, 0.16);
+    --siem-accent: #22d3ee;
+
+    --bs-body-bg: var(--siem-bg);
+    --bs-body-color: var(--siem-text);
+    --bs-border-color: var(--siem-border);
+    --bs-secondary-color: var(--siem-text-muted);
+    --bs-emphasis-color: #f8fafc;
+    --bs-link-color-rgb: 34, 211, 238;
+    --bs-link-hover-color-rgb: 103, 232, 249;
+}
+
+/* --- Light: for a projector, or a printed screenshot -------------------- */
+[data-bs-theme='light'] {
+    --siem-bg: #f1f5f9;
+    --siem-surface: #ffffff;
+    --siem-surface-2: #f8fafc;
+    --siem-border: #d8e0ea;
+    --siem-text: #0f172a;
+    --siem-text-muted: #5b6b82;
+    --siem-grid: rgba(15, 23, 42, 0.10);
+    --siem-accent: #0e7490;
+
+    --bs-body-bg: var(--siem-bg);
+    --bs-body-color: var(--siem-text);
+    --bs-border-color: var(--siem-border);
+    --bs-secondary-color: var(--siem-text-muted);
+}
+
+/* ==========================================================================
+   2. TYPOGRAPHY
+   ==========================================================================
+   One family for prose and one for machine data, and nothing else. The
+   monospace face is not decoration: an IP address, a hash and a file path are
+   compared character by character, and a proportional font makes that
+   genuinely harder by narrowing the very characters that differ.
+   -------------------------------------------------------------------------- */
+
+body {
+    font-family: var(--siem-font);
+    background-color: var(--siem-bg);
+    color: var(--siem-text);
+    /* Long log messages are read, not skimmed. */
+    font-size: 0.95rem;
+    letter-spacing: 0.005em;
+}
+
+.page-title {
+    font-size: 1.6rem;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+}
+
+.page-subtitle {
+    color: var(--siem-text-muted);
+    font-size: 0.9rem;
+}
+
+/* Section headings sit above a group of panels and are deliberately quiet:
+   they organise the page without competing with the numbers on it. */
+.section-title {
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--siem-text-muted);
+    margin-bottom: 0.6rem;
+}
+
+.mono,
+.font-monospace {
+    font-family: var(--siem-mono);
+    font-size: 0.86em;
+    letter-spacing: -0.01em;
+}
+
+.text-ok { color: var(--siem-ok) !important; }
+.text-warn { color: var(--siem-warn) !important; }
+.text-bad { color: var(--siem-bad) !important; }
+
+/* ==========================================================================
+   3. PAGE FURNITURE
+   ========================================================================== */
+
+.navbar {
+    background-color: var(--siem-surface) !important;
+    border-bottom: 1px solid var(--siem-border);
+}
+
+.navbar .navbar-brand {
+    letter-spacing: -0.01em;
+}
+
+/* The active page is marked with a rule under it as well as brighter text,
+   so it survives being viewed on a washed-out projector. */
+.navbar .nav-link.active {
+    color: var(--siem-accent) !important;
+    box-shadow: inset 0 -2px 0 var(--siem-accent);
+}
+
+footer {
+    background-color: var(--siem-surface) !important;
+    border-top: 1px solid var(--siem-border);
+    color: var(--siem-text-muted) !important;
+}
+
+.page-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+/* ==========================================================================
+   4. LIVE INDICATOR AND STATUS CHIPS
+   ==========================================================================
+   The pill answers "is this page still being updated?" and the chips beneath
+   answer "is the server still collecting?" — two different questions that a
+   single badge used to blur together. A dashboard that has quietly lost its
+   connection looks exactly like one where nothing is happening, and on a
+   security console those are opposite conclusions.
+   -------------------------------------------------------------------------- */
+
+.live-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+}
+
+.live-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.3rem 0.7rem;
+    border-radius: 999px;
+    border: 1px solid var(--siem-border);
+    background: var(--siem-surface);
+    font-size: 0.8rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.live-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--siem-idle);
+    flex: 0 0 auto;
+}
+
+.live-pill[data-state='live'] {
+    border-color: rgba(34, 197, 94, 0.45);
+    color: var(--siem-ok);
+}
+
+.live-pill[data-state='live'] .live-dot {
+    background: var(--siem-ok);
+    animation: siem-pulse 2s ease-in-out infinite;
+}
+
+.live-pill[data-state='working'] .live-dot {
+    background: var(--siem-accent);
+}
+
+.live-pill[data-state='lost'] {
+    border-color: rgba(239, 68, 68, 0.5);
+    color: var(--siem-bad);
+}
+
+.live-pill[data-state='lost'] .live-dot {
+    background: var(--siem-bad);
+    animation: siem-pulse 1s ease-in-out infinite;
+}
+
+.live-pill[data-state='off'] {
+    color: var(--siem-text-muted);
+}
+
+/* The only animation on the page, and it is carrying information: it is the
+   difference between a live figure and a frozen one. Anyone who has asked
+   their system not to animate gets a static dot instead. */
+@keyframes siem-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .live-pill .live-dot { animation: none !important; }
+    .metric, .panel, .tactic { transition: none !important; }
+}
+
+.live-meta {
+    font-size: 0.78rem;
+    color: var(--siem-text-muted);
+    white-space: nowrap;
+    margin: 0;
+}
+
+.live-select {
+    width: auto;
+    min-width: 5rem;
+    background-color: var(--siem-surface);
+    border-color: var(--siem-border);
+    color: var(--siem-text);
+    font-size: 0.8rem;
+}
+
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: var(--siem-radius-sm);
+    border: 1px solid var(--siem-border);
+    background: var(--siem-surface);
+    font-size: 0.76rem;
+}
+
+.chip-label {
+    color: var(--siem-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.68rem;
+}
+
+.chip-value {
+    font-weight: 600;
+}
+
+.chip--ok .chip-value { color: var(--siem-ok); }
+.chip--idle .chip-value { color: var(--siem-text-muted); }
+.chip--neutral .chip-value { font-family: var(--siem-mono); }
+
+/* ==========================================================================
+   5. PANELS AND METRIC CARDS
+   ========================================================================== */
+
+.panel {
+    background: var(--siem-surface);
+    border: 1px solid var(--siem-border);
+    border-radius: var(--siem-radius);
+    overflow: hidden;
+}
+
+.panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.6rem 0.9rem;
+    background: var(--siem-surface-2);
+    border-bottom: 1px solid var(--siem-border);
+}
+
+.panel-title {
+    margin: 0;
+    font-size: 0.85rem;
+    font-weight: 650;
+}
+
+.panel-note {
+    color: var(--siem-text-muted);
+    font-size: 0.75rem;
+    text-align: right;
+}
+
+.panel-body {
+    padding: 0.9rem;
+}
+
+.panel-body.p-0 { padding: 0; }
+
+/* A metric card leads with the number. The label above it is small because
+   the reader is scanning for the figure, and the line beneath it carries the
+   context that stops the figure being misread — "12 alerts" means something
+   different when none of them have been reviewed. */
+.metric {
+    background: var(--siem-surface);
+    border: 1px solid var(--siem-border);
+    border-left: 3px solid var(--siem-idle);
+    border-radius: var(--siem-radius);
+    padding: 0.75rem 0.9rem;
+    transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.metric:hover {
+    transform: translateY(-2px);
+}
+
+.metric-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--siem-text-muted);
+    margin-bottom: 0.15rem;
+}
+
+.metric-value {
+    font-size: 1.9rem;
+    font-weight: 680;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+}
+
+.metric-sep {
+    color: var(--siem-text-muted);
+    font-size: 1.2rem;
+    margin: 0 0.15rem;
+}
+
+.metric-foot {
+    font-size: 0.75rem;
+    color: var(--siem-text-muted);
+    margin-top: 0.2rem;
+}
+
+.metric--info { border-left-color: var(--siem-accent); }
+.metric--accent { border-left-color: var(--siem-low); }
+.metric--warn { border-left-color: var(--siem-warn); }
+.metric--danger { border-left-color: var(--siem-bad); }
+.metric--fim { border-left-color: #a78bfa; }
+
+.dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    margin-right: 0.25rem;
+    vertical-align: middle;
+}
+
+.dot--ok { background: var(--siem-ok); }
+.dot--bad { background: var(--siem-bad); }
+
+/* ==========================================================================
+   6. SYSTEM ACTIVITY PIPELINE
+   ==========================================================================
+   Collect → Process → Detect → Alert, with the number each stage actually
+   produced. A stage showing zero is not styled as a failure, because zero
+   alerts is the state everyone hopes for; it is simply not lit.
+   -------------------------------------------------------------------------- */
+
+.pipeline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    counter-reset: stage;
+}
+
+.pipeline-step {
+    flex: 1 1 150px;
+    position: relative;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--siem-border);
+    border-radius: var(--siem-radius-sm);
+    background: var(--siem-surface-2);
+}
+
+/* The arrow between stages is drawn rather than typed, so it never wraps to
+   a line of its own and disappears on a narrow screen. */
+.pipeline-step:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    right: -0.42rem;
+    top: 50%;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-top: 2px solid var(--siem-border);
+    border-right: 2px solid var(--siem-border);
+    transform: translateY(-50%) rotate(45deg);
+    z-index: 1;
+}
+
+.pipeline-step.is-active {
+    border-color: rgba(34, 211, 238, 0.5);
+}
+
+.pipeline-name {
+    display: block;
+    font-size: 0.7rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--siem-text-muted);
+}
+
+.pipeline-value {
+    display: block;
+    font-size: 1.25rem;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+}
+
+.pipeline-step.is-active .pipeline-value {
+    color: var(--siem-accent);
+}
+
+.pipeline-note {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--siem-text-muted);
+}
+
+/* ==========================================================================
+   7. ATT&CK COVERAGE
+   ==========================================================================
+   Tactics in kill-chain order. A tactic with no alerts stays on screen, dim
+   rather than absent, because "watched, nothing seen" and "not watched at
+   all" are different answers and the panel exists to distinguish them.
+   -------------------------------------------------------------------------- */
+
+.tactic-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.5rem;
+}
+
+.tactic {
+    padding: 0.55rem 0.65rem;
+    border: 1px solid var(--siem-border);
+    border-radius: var(--siem-radius-sm);
+    background: var(--siem-surface-2);
+    transition: border-color 0.15s ease;
+}
+
+.tactic-name {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--siem-text-muted);
+    line-height: 1.25;
+}
+
+.tactic-count {
+    font-size: 1.35rem;
+    font-weight: 680;
+    font-variant-numeric: tabular-nums;
+    color: var(--siem-text-muted);
+}
+
+.tactic-rules {
+    font-family: var(--siem-mono);
+    font-size: 0.68rem;
+    color: var(--siem-text-muted);
+}
+
+.tactic.is-hit {
+    border-color: rgba(239, 68, 68, 0.45);
+}
+
+.tactic.is-hit .tactic-count {
+    color: var(--siem-bad);
+}
+
+.tactic.is-hit .tactic-name {
+    color: var(--siem-text);
+}
+
+/* A panel whose last refresh failed keeps its rows and is dimmed, so it is
+   visibly not current without the reader losing the last good picture. The
+   live indicator at the top of the page is what says why. */
+[data-stale='true'] {
+    opacity: 0.5;
+    filter: saturate(0.6);
+}
+
+/* A rule that has never fired is dimmed, not hidden. */
+tr.is-quiet {
+    opacity: 0.62;
+}
+
+.tech-link {
+    text-decoration: none;
+    border-bottom: 1px dotted currentColor;
+}
+
+.tech-name {
+    font-size: 0.72rem;
+    color: var(--siem-text-muted);
+    line-height: 1.2;
+}
+
+/* ==========================================================================
+   8. SEVERITY, STATUS AND CHANGE BADGES
+   ==========================================================================
+   Every badge here carries a word. The colour is the fast path; the word is
+   what makes the dashboard survive a projector, a photocopy and a reader who
+   does not see red and amber as different.
+   -------------------------------------------------------------------------- */
+
+.sev {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: var(--siem-radius-sm);
+    border: 1px solid currentColor;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+}
+
+.sev-mark {
+    font-size: 0.7em;
+    line-height: 1;
+}
+
+.sev--high { color: var(--siem-high); background: rgba(239, 68, 68, 0.12); }
+.sev--medium { color: var(--siem-medium); background: rgba(245, 158, 11, 0.12); }
+.sev--low { color: var(--siem-low); background: rgba(56, 189, 248, 0.12); }
+
+.fim-tag {
+    display: inline-block;
+    padding: 0.1rem 0.45rem;
+    border-radius: var(--siem-radius-sm);
+    border: 1px solid currentColor;
+    font-size: 0.7rem;
+    font-weight: 650;
+}
+
+.fim--modified { color: var(--siem-high); background: rgba(239, 68, 68, 0.10); }
+.fim--deleted { color: var(--siem-high); background: rgba(239, 68, 68, 0.10); }
+.fim--added { color: var(--siem-medium); background: rgba(245, 158, 11, 0.10); }
+
+.hash {
+    color: var(--siem-text-muted);
+    white-space: nowrap;
+}
+
+/* Severity badges keep a consistent width so the column doesn't jitter as
+   rows arrive during a live refresh. */
+.badge {
+    min-width: 4.5rem;
+}
+
+/* ==========================================================================
+   9. TABLES
+   ========================================================================== */
+
+.table {
+    --bs-table-bg: transparent;
+    --bs-table-color: var(--siem-text);
+    --bs-table-border-color: var(--siem-border);
+    --bs-table-hover-bg: var(--siem-surface-2);
+    --bs-table-hover-color: var(--siem-text);
+    margin-bottom: 0;
+}
+
+.table > thead > tr > th {
+    background: var(--siem-surface-2);
+    color: var(--siem-text-muted);
+    font-size: 0.7rem;
+    font-weight: 650;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--siem-border);
+    white-space: nowrap;
+}
+
 .table td {
     vertical-align: middle;
 }
@@ -21,32 +647,87 @@ canvas {
     max-width: 100%;
 }
 
-/* Stat cards: a subtle lift so they read as a group above the charts. */
-#statCards .card {
-    transition: transform 0.15s ease-in-out;
+/* Bootstrap's contextual row classes are tuned for a light table and read as
+   solid blocks of colour on a dark one. Here they are a tint plus a marker
+   down the leading edge, which stays legible in both themes. */
+.table > tbody > tr.table-danger {
+    --bs-table-bg: rgba(239, 68, 68, 0.10);
+    --bs-table-color: var(--siem-text);
+    box-shadow: inset 3px 0 0 var(--siem-high);
 }
 
-#statCards .card:hover {
-    transform: translateY(-2px);
+.table > tbody > tr.table-warning {
+    --bs-table-bg: rgba(245, 158, 11, 0.10);
+    --bs-table-color: var(--siem-text);
+    box-shadow: inset 3px 0 0 var(--siem-medium);
 }
 
-/* Monospace columns (IPs, rule IDs) sit better slightly smaller. */
-.font-monospace {
-    font-size: 0.9em;
+.list-group-item {
+    background-color: var(--siem-surface);
+    border-color: var(--siem-border);
+    color: var(--siem-text);
 }
 
-/* Severity badges keep a consistent width so the column doesn't jitter. */
-.badge {
-    min-width: 4.5rem;
+/* ==========================================================================
+   10. CHARTS AND MISCELLANEOUS
+   ========================================================================== */
+
+/* Charts need a bounded height or Chart.js grows them without limit. */
+canvas {
+    max-height: 260px;
+}
+
+.card {
+    background-color: var(--siem-surface);
+    border-color: var(--siem-border);
 }
 
 /* The import panel's tab body should look continuous with the tab strip. */
 .tab-content {
-    background-color: var(--bs-body-bg);
+    background-color: var(--siem-surface);
+}
+
+.form-control,
+.form-select {
+    background-color: var(--siem-surface-2);
+    border-color: var(--siem-border);
+    color: var(--siem-text);
+}
+
+.form-control:focus,
+.form-select:focus {
+    background-color: var(--siem-surface-2);
+    color: var(--siem-text);
+    border-color: var(--siem-accent);
+    box-shadow: 0 0 0 0.15rem rgba(34, 211, 238, 0.2);
+}
+
+/* Keyboard focus must stay obvious. A console is operated by people who
+   tab through it, and removing the outline to tidy the design would make it
+   unusable for them. */
+a:focus-visible,
+button:focus-visible,
+select:focus-visible,
+input:focus-visible {
+    outline: 2px solid var(--siem-accent);
+    outline-offset: 2px;
 }
 
 /* Scrollable admin lists get a faint edge so it's clear they scroll. */
 #hostsListAdmin,
 #ipListAdmin {
     scrollbar-width: thin;
+}
+
+/* On a phone the live controls stack under the title rather than squeezing
+   the heading into two characters a line. */
+@media (max-width: 575.98px) {
+    .live-bar {
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    .metric-value {
+        font-size: 1.5rem;
+    }
 }

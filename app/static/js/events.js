@@ -1,7 +1,11 @@
 /**
  * Log Analysis Module page: sample log import and stored event browsing.
  */
-import { createEl, clearContainer, emptyRow, notify, formatTime } from './dom.js';
+import {
+    createEl, clearContainer, emptyRow, notify, formatTime,
+    markLoaded, panelFailed, renderLivePill,
+} from './dom.js';
+import { createLiveRefresh } from './live.js';
 import {
     fetchEvents, fetchHosts, fetchSamples, importBundledSample,
     uploadSample, importPastedLog, generateEvents, clearEvents,
@@ -15,6 +19,7 @@ const pageLabel = document.getElementById('pageLabel');
 const prevBtn = document.getElementById('prevPage');
 const nextBtn = document.getElementById('nextPage');
 const importResult = document.getElementById('importResult');
+const livePill = document.getElementById('liveIndicator');
 
 let offset = 0;
 let total = 0;
@@ -42,7 +47,20 @@ export async function initEvents() {
 
     await populateHosts();
     await populateSamples();
-    await load();
+
+    // The Events page is where newly collected records actually appear, so it
+    // follows the collector on the same cadence as the dashboard. The current
+    // filters and page are read afresh each time, so an auto-refresh never
+    // drags the reader back to page one or discards what they filtered on.
+    let drawn = false;
+    const live = createLiveRefresh({
+        refresh: async () => {
+            await load({ quiet: drawn });
+            drawn = true;
+        },
+        onStatus: (status) => renderLivePill(livePill, status),
+    });
+    live.refreshNow();
 }
 
 // ======================= HOST + SAMPLE PICKERS =======================
@@ -269,9 +287,18 @@ async function handleClear(event) {
 
 // ======================= EVENT TABLE =======================
 
-async function load() {
-    clearContainer(eventsBody);
-    emptyRow(eventsBody, 7, 'Loading…');
+/**
+ * Fetch and draw the current page of events.
+ *
+ * `quiet` suppresses the "Loading…" placeholder. A deliberate action deserves
+ * that feedback; the five-second auto-refresh does not, and showing it would
+ * make the table flash once every five seconds for no reason.
+ */
+async function load({ quiet = false } = {}) {
+    if (!quiet) {
+        clearContainer(eventsBody);
+        emptyRow(eventsBody, 7, 'Loading…');
+    }
 
     try {
         const data = await fetchEvents({
@@ -286,8 +313,13 @@ async function load() {
         render(data.events);
         updatePager();
     } catch (err) {
-        clearContainer(eventsBody);
-        emptyRow(eventsBody, 7, `Error loading events: ${err.message}`);
+        // The rows already on screen are kept and dimmed rather than wiped.
+        // The live indicator at the top of the page is what reports that the
+        // connection is down; this table only stops claiming to be current.
+        if (panelFailed(eventsBody)) {
+            clearContainer(eventsBody);
+            emptyRow(eventsBody, 7, `Error loading events: ${err.message}`);
+        }
     }
 }
 
@@ -301,6 +333,7 @@ function render(events) {
     }
 
     countLabel.textContent = `${total} event${total === 1 ? '' : 's'} matched`;
+    markLoaded(eventsBody);
 
     events.forEach((event) => {
         const row = createEl('tr', [], '', eventsBody);

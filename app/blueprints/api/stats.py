@@ -12,6 +12,8 @@ from sqlalchemy import func
 
 from app.blueprints.api import api_bp
 from app.extensions import db
+from app import rule_catalog
+from app.rule_catalog import RULE_IDS, RULE_NAMES
 from app.models import (
     Alert,
     Event,
@@ -23,24 +25,22 @@ from app.models import (
     HOST_OFFLINE,
     HOST_ONLINE,
     HOST_UNKNOWN,
+    FILE_INTEGRITY_EVENT_TYPES,
     IP_BANNED,
     SEVERITIES,
     SEVERITY_HIGH,
+    SEVERITY_MEDIUM,
+    WatchedPath,
     USB_AUDIT_UNKNOWN,
     utcnow,
 )
 
-RULE_NAMES = {
-    'R-01': 'Failed Login',
-    'R-02': 'Invalid User',
-    'R-03': 'Threat IP Match',
-    'R-04': 'Multiple Host Attempt',
-    'R-05': 'Audit Log Cleared',
-    'R-06': 'Account Created/Deleted',
-    'R-07': 'Privilege Change',
-    'R-08': 'Account Lockout',
-    'R-09': 'External Device Connected',
-}
+# Rule names and their ATT&CK mappings come from app/rule_catalog.py rather
+# than being repeated here. They used to be a dictionary in this file, and
+# R-10 was added to the detection engine without being added to it -- so
+# file-integrity alerts were stored and then quietly missing from the chart
+# below. Deriving the list from the catalogue makes that failure impossible to
+# repeat.
 
 
 @api_bp.route('/stats/summary', methods=['GET'])
@@ -72,8 +72,24 @@ def stats_summary():
         'high_alerts': Alert.query.filter_by(severity=SEVERITY_HIGH).count(),
         'unacknowledged': Alert.query.filter_by(acknowledged=False).count(),
         'alerts_24h': Alert.query.filter(Alert.timestamp >= day_ago).count(),
+        'medium_alerts': Alert.query.filter_by(severity=SEVERITY_MEDIUM).count(),
         'threat_ips': IPRegistry.query.count(),
         'banned_ips': IPRegistry.query.filter_by(status=IP_BANNED).count(),
+        # File integrity. Counted from events rather than from alerts because
+        # a change is a finding whether or not R-10 has been run over it yet,
+        # and the card is answering "has anything moved?" not "has the engine
+        # noticed?".
+        'fim_changes': Event.query.filter(
+            Event.event_type.in_(FILE_INTEGRITY_EVENT_TYPES)
+        ).count(),
+        'fim_changes_24h': Event.query.filter(
+            Event.event_type.in_(FILE_INTEGRITY_EVENT_TYPES),
+            Event.timestamp >= day_ago,
+        ).count(),
+        # How many paths are being watched at all. Zero changes means
+        # something quite different when this is zero too, and the dashboard
+        # has to be able to tell those apart.
+        'watched_paths': WatchedPath.query.count(),
     })
 
 
@@ -125,10 +141,12 @@ def stats_rules():
         .group_by(Alert.rule_id)
         .all()
     )
-    rule_ids = sorted(RULE_NAMES)
     return jsonify({
-        'labels': [f"{rid} {RULE_NAMES[rid]}" for rid in rule_ids],
-        'counts': [rows.get(rid, 0) for rid in rule_ids],
+        'labels': [f"{rid} {RULE_NAMES[rid]}" for rid in RULE_IDS],
+        'counts': [rows.get(rid, 0) for rid in RULE_IDS],
+        # The rule ids alongside the labels, so a caller can line a bar up
+        # with the catalogue without parsing the label back apart.
+        'rule_ids': list(RULE_IDS),
     })
 
 
@@ -195,3 +213,63 @@ def stats_top_sources():
         {'source_ip': ip, 'hits': hits, 'status': statuses.get(ip, 'UNKNOWN')}
         for ip, hits in rows
     ])
+
+
+@api_bp.route('/stats/attack', methods=['GET'])
+@login_required
+def stats_attack():
+    """
+    ATT&CK coverage: what each rule is looking for, and what it has found.
+
+    Two things are reported side by side, and the distinction between them is
+    the point of the endpoint. `techniques` lists every rule this deployment
+    runs, whether or not it has ever fired -- so a technique with zero alerts
+    reads as "watched, nothing seen" rather than disappearing. `tactics` rolls
+    those up into the stages of an intrusion, in kill-chain order, so an
+    evaluator can see at a glance which stages Mini-SIEM can observe at all.
+
+    A rule that has never fired is not a failure and a tactic with no rules is
+    not hidden; both are stated, because a coverage panel that only showed
+    successes would be advertising rather than reporting.
+    """
+    counts = dict(
+        db.session.query(Alert.rule_id, func.count(Alert.id))
+        .group_by(Alert.rule_id)
+        .all()
+    )
+    latest = dict(
+        db.session.query(Alert.rule_id, func.max(Alert.timestamp))
+        .group_by(Alert.rule_id)
+        .all()
+    )
+
+    techniques = []
+    for rule_id in RULE_IDS:
+        info = rule_catalog.RULES[rule_id].to_dict()
+        last = latest.get(rule_id)
+        info['alerts'] = counts.get(rule_id, 0)
+        info['last_seen'] = last.strftime('%Y-%m-%d %H:%M:%S') if last else None
+        techniques.append(info)
+
+    by_tactic = {}
+    for entry in techniques:
+        bucket = by_tactic.setdefault(
+            entry['tactic'], {'tactic': entry['tactic'], 'rules': [], 'alerts': 0}
+        )
+        bucket['rules'].append(entry['rule_id'])
+        bucket['alerts'] += entry['alerts']
+
+    tactics = [by_tactic[name] for name in rule_catalog.tactics_in_order()]
+
+    return jsonify({
+        'techniques': techniques,
+        'tactics': tactics,
+        'rules_total': len(RULE_IDS),
+        'rules_triggered': sum(1 for entry in techniques if entry['alerts']),
+        # Distinct ATT&CK techniques rather than rules: R-02 and R-08 both map
+        # to T1110, and counting them twice would overstate coverage.
+        'techniques_total': len({entry['technique_id'] for entry in techniques}),
+        'techniques_observed': len({
+            entry['technique_id'] for entry in techniques if entry['alerts']
+        }),
+    })

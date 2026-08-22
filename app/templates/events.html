@@ -6,20 +6,25 @@
 <section class="py-4">
   <div class="container">
 
-    <div class="mb-4">
-      <h2 class="mb-0">Security Events</h2>
-      <small class="text-muted">
-        Normalized events extracted from collected or imported logs. These are
-        the records the detection rules run over.
-      </small>
+    <div class="page-head mb-4">
+      <div>
+        <h1 class="page-title mb-1">Security Events</h1>
+        <p class="page-subtitle mb-0">
+          Normalized events extracted from collected or imported logs. These
+          are the records the detection rules run over.
+        </p>
+      </div>
+      <span id="liveIndicator" class="live-pill" data-state="working">
+        <span class="live-dot"></span><span class="live-text">Connecting…</span>
+      </span>
     </div>
 
     <!-- ================= IMPORT PANEL (FR-05) ================= -->
-    <div class="card shadow-sm mb-4">
-      <div class="card-header bg-dark text-white py-2" data-bs-theme="dark">
-        <h6 class="mb-0">Import Sample Logs</h6>
+    <div class="panel mb-4">
+      <div class="panel-head">
+        <h6 class="panel-title">Import sample logs</h6>
       </div>
-      <div class="card-body">
+      <div class="panel-body">
 
         <div class="row g-3 mb-3">
           <div class="col-md-5">
@@ -160,11 +165,11 @@
     </div>
 
     <!-- ================= EVENT TABLE ================= -->
-    <div class="card shadow-sm">
-      <div class="card-body p-0">
+    <div class="panel">
+      <div class="panel-body p-0">
         <div class="table-responsive">
           <table class="table table-striped table-hover mb-0 align-middle">
-            <thead class="table-light">
+            <thead>
               <tr>
                 <th>Time</th>
                 <th>Host</th>
