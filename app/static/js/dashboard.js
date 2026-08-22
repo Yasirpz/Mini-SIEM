@@ -43,7 +43,14 @@ const charts = {};
 // the stylesheet rather than repeated here, so the amber in a chart is the
 // same amber as the badge beside it — two palettes drifting apart is how a
 // dashboard stops being readable at a glance.
-const COLORS = readPalette();
+//
+// Re-read rather than captured once. Half of these values change with the
+// theme, and this module is evaluated before main.js has applied the saved
+// one: reading them at import time meant a reader whose saved theme was light
+// got charts drawn with the dark palette — tick labels at roughly 2.5:1
+// against white, and grid lines that were effectively invisible. Toggling the
+// theme afterwards never fixed it either, because nothing re-read them.
+let COLORS = readPalette();
 
 function readPalette() {
     const style = getComputedStyle(document.documentElement);
@@ -69,7 +76,37 @@ export async function initDashboard() {
     }
 
     buildIntervalPicker();
+    watchThemeChanges();
     startLiveRefresh();
+}
+
+/**
+ * Redraw the charts when the theme changes.
+ *
+ * Everything else on the page is styled in CSS and follows the theme on its
+ * own. A Chart.js canvas cannot: its axis and grid colours are baked into the
+ * chart's options when it is built, so without this the charts keep whichever
+ * palette they were born with.
+ *
+ * Watching the attribute rather than listening to the toggle button keeps
+ * this decoupled from how the theme happens to be set — main.js owns that,
+ * and a second way of changing it later would still be noticed here.
+ */
+function watchThemeChanges() {
+    new MutationObserver(() => {
+        COLORS = readPalette();
+        // Destroyed rather than updated: renderChart only feeds new *data*
+        // into an existing chart, and the colours that need to change live in
+        // its options.
+        Object.keys(charts).forEach((id) => {
+            charts[id].destroy();
+            delete charts[id];
+        });
+        refreshCharts();
+    }).observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['data-bs-theme'],
+    });
 }
 
 /**
@@ -347,6 +384,10 @@ function setPipelineStage(stage, value, note) {
 
 async function refreshCharts() {
     if (typeof Chart === 'undefined') return;
+
+    // Cheap, and it means a chart built before the theme settled still ends
+    // up with the right palette on the next refresh.
+    COLORS = readPalette();
 
     try {
         const [timeline, severity, rules] = await Promise.all([
