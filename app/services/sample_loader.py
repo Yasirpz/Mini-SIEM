@@ -28,6 +28,7 @@ from app.models import (
     EVT_SUCCESSFUL_LOGIN,
     EVT_SUDO_USAGE,
     EVT_WIN_FAILED_LOGIN,
+    utcnow,
 )
 
 # Syslog-style month names, for "Nov 12 10:31:22" timestamps.
@@ -105,7 +106,7 @@ class SampleLoader:
     @staticmethod
     def parse_auth_log(text, reference=None):
         """Parse Linux SSH authentication log lines."""
-        reference = reference or datetime.now()
+        reference = reference or utcnow()
         events = []
 
         for line in text.splitlines():
@@ -233,7 +234,7 @@ class SampleLoader:
         reliably produces alerts. The default address is from the RFC 5737
         documentation range, which never routes to a real machine.
         """
-        now = datetime.now().replace(microsecond=0)
+        now = utcnow().replace(microsecond=0)
         usernames = ['root', 'admin', 'test', 'oracle', 'postgres']
         events = []
 
@@ -322,7 +323,7 @@ class SampleLoader:
         if isinstance(value, datetime):
             return value
         if not value:
-            return datetime.now().replace(microsecond=0)
+            return utcnow().replace(microsecond=0)
 
         text = str(value).strip().replace('/', '-')
         formats = (
@@ -342,7 +343,7 @@ class SampleLoader:
         try:
             return datetime.fromisoformat(text)
         except ValueError:
-            return datetime.now().replace(microsecond=0)
+            return utcnow().replace(microsecond=0)
 
 
 def _first(values, *keys):

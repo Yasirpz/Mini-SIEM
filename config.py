@@ -88,7 +88,36 @@ class Config:
     # How often the scheduler wakes to ask which hosts are due. This is not
     # the collection interval -- that is set per host -- only the resolution
     # at which due times are noticed.
-    SCHEDULER_TICK_SECONDS = int(os.getenv('SCHEDULER_TICK_SECONDS', 15))
+    # Five seconds, because that is the shortest collection interval a host
+    # may be set to and a tick coarser than the interval would silently round
+    # every host up to the tick.
+    SCHEDULER_TICK_SECONDS = int(os.getenv('SCHEDULER_TICK_SECONDS', 5))
+
+    # --- How times are displayed ------------------------------------------
+    # Everything is *stored* in UTC. This only decides which wall clock the
+    # dashboard renders it against.
+    #
+    # Pinned to Pakistan Standard Time (UTC+05:00) rather than left to the
+    # viewing machine, because the lab, the monitored hosts and the people
+    # reading the dashboard are all in Pakistan, and "whatever this browser
+    # thinks" is not a defensible answer when an operator has to state when an
+    # incident happened. A machine whose clock is set to the wrong region --
+    # a fresh Windows install often is -- would otherwise silently relabel
+    # every event on screen.
+    #
+    # Set MINISIEM_DISPLAY_TIMEZONE to another IANA zone name to move the
+    # display, or to the literal word "local" to go back to using whatever
+    # timezone the viewing machine is configured for.
+    #
+    # An *empty* value falls back to the default rather than meaning "use the
+    # browser's zone". That matters because .env.example ships the key with no
+    # value, so the usual "copy the example to .env" would otherwise switch
+    # Pakistan time off for everyone who followed the instructions.
+    DISPLAY_TIMEZONE = (
+        os.getenv('MINISIEM_DISPLAY_TIMEZONE', '').strip() or 'Asia/Karachi'
+    )
+    if DISPLAY_TIMEZONE.lower() == 'local':
+        DISPLAY_TIMEZONE = ''
 
 
 class TestConfig(Config):

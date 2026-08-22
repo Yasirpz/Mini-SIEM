@@ -2,14 +2,25 @@
 Collects and normalizes authentication logs from Linux and Windows hosts
 into a common event format:
     {timestamp, alert_type, source_ip, user, message, raw_log}
+
+Every timestamp leaving this module is naive **UTC**, matching `models.utcnow`
+and therefore every other datetime the application stores. That is not a
+cosmetic detail: a monitored machine keeps its event log in *its own* local
+time, so a PC in Pakistan and the laptop running Mini-SIEM in another timezone
+would otherwise write times that cannot be compared, ordered, or correlated by
+the detection rules -- and the dashboard, which renders stored times as UTC,
+would show events hours in the future. The conversion is therefore done where
+the local time is read, on the machine that owns the clock, rather than
+guessed at afterwards.
 """
 import re
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from flask import current_app
 
 from app.models import (
+    utcnow,
     EVT_ACCOUNT_CREATED,
     EVT_ACCOUNT_DELETED,
     EVT_ACCOUNT_ENABLED,
@@ -146,8 +157,11 @@ class LogCollector:
         cmd = "sudo journalctl -u ssh -o json --no-pager"
 
         if last_fetch_time:
+            # `last_fetch_time` is stored in UTC, but journalctl reads a bare
+            # timestamp in the *host's* local time. Saying "UTC" explicitly is
+            # what stops the window sliding by the host's offset.
             since_str = last_fetch_time.strftime("%Y-%m-%d %H:%M:%S")
-            cmd += f' --since "{since_str}"'
+            cmd += f' --since "{since_str} UTC"'
         else:
             cmd += ' --since "7 days ago"'  # default range on first run
 
@@ -167,7 +181,13 @@ class LogCollector:
                     message = entry.get('MESSAGE', '')
 
                     ts_micro = int(entry.get('__REALTIME_TIMESTAMP', 0))
-                    timestamp = datetime.fromtimestamp(ts_micro / 1_000_000)
+                    # journald records epoch microseconds, which are already
+                    # UTC. Reading them back through the *local* clock was the
+                    # bug: it silently re-labelled every Linux event with the
+                    # SIEM server's offset.
+                    timestamp = datetime.fromtimestamp(
+                        ts_micro / 1_000_000, tz=timezone.utc
+                    ).replace(tzinfo=None)
 
                     parsed = LogCollector._parse_linux_message(message, timestamp)
                     if parsed:
@@ -253,9 +273,18 @@ class LogCollector:
         ids = ','.join(str(i) for i in wanted)
 
         if last_fetch_time:
+            # The stored watermark is UTC; Get-WinEvent compares StartTime
+            # against the log's local timestamps. The kind is stated and the
+            # conversion done on the machine being queried, so a remote host
+            # in another timezone converts using *its* offset rather than the
+            # SIEM server's.
             ts_str = last_fetch_time.strftime('%Y-%m-%d %H:%M:%S')
+            start_expr = (
+                f"[datetime]::SpecifyKind([datetime]'{ts_str}', "
+                "[System.DateTimeKind]::Utc).ToLocalTime()"
+            )
             filter_script = (
-                f"@{{LogName='Security'; Id={ids}; StartTime=[datetime]'{ts_str}'}}"
+                f"@{{LogName='Security'; Id={ids}; StartTime={start_expr}}}"
             )
         else:
             filter_script = f"@{{LogName='Security'; Id={ids}}}"
@@ -299,7 +328,11 @@ class LogCollector:
             "   } else { $keep = $true } "
             "   if ($keep) { "
             "      [PSCustomObject]@{ "
-            "         Timestamp = $rec.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'); "
+            # TimeCreated is the *monitored machine's* local time. It is
+            # converted here, on that machine, because only it knows its own
+            # offset -- and everything downstream stores and compares UTC.
+            "         Timestamp = $rec.TimeCreated.ToUniversalTime()"
+            ".ToString('yyyy-MM-dd HH:mm:ss'); "
             "         EventId = $rec.Id; "
             "         TargetUserName = $account; "
             "         SubjectUserName = [string]$data['SubjectUserName']; "
@@ -458,8 +491,14 @@ class LogCollector:
 
     @staticmethod
     def _parse_windows_timestamp(value):
-        """Parse the PowerShell-formatted timestamp, falling back to now."""
+        """
+        Parse the PowerShell-formatted timestamp, falling back to now.
+
+        The value arrives already converted to UTC by the query, so it is
+        parsed as-is. The fallback is UTC for the same reason: a record whose
+        time could not be read must still sort alongside the ones that could.
+        """
         try:
             return datetime.strptime(value, '%Y-%m-%d %H:%M:%S')
         except (ValueError, TypeError):
-            return datetime.now().replace(microsecond=0)
+            return utcnow().replace(microsecond=0)

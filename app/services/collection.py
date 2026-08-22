@@ -20,12 +20,11 @@ import logging
 import os
 import re
 import time
-from datetime import datetime
 
 from flask import current_app
 
 from app.extensions import db
-from app.models import COLLECT_LOCAL, COLLECT_SSH, COLLECT_WINRM, LogSource
+from app.models import COLLECT_LOCAL, COLLECT_SSH, COLLECT_WINRM, LogSource, utcnow
 from app.services.log_analyzer import LogAnalyzer
 from app.services.log_collector import LogCollector
 from app.services.remote_client import RemoteClient
@@ -186,7 +185,10 @@ def collect_host(host):
     except Exception as exc:
         return fail(500, 'Storing the collected events failed.', detail=str(exc))
 
-    log_source.last_fetch = datetime.now()
+    # UTC, like every other datetime in the database. The next collection
+    # turns this back into the monitored host's local time when it builds the
+    # query, so the watermark means the same thing on every machine.
+    log_source.last_fetch = utcnow()
     host.record_attempt(True, latency_ms=elapsed_ms())
     db.session.commit()
 
