@@ -26,6 +26,13 @@ LOCAL hashes with `hashlib` in-process, WINRM runs `Get-FileHash` on the
 target over PowerShell remoting, and SSH runs `sha256sum`. All three return
 the same records, so the comparison logic below never learns which one it is
 looking at.
+
+"The same records" includes the clock they are on. A file's modification time
+is read from the watched machine, which keeps it in *its own* local time, so
+each scanner converts to UTC on the host that owns the clock -- the same rule
+`log_collector` follows for event times, and for the same reason: everything
+downstream stores naive UTC and the dashboard converts once, to Pakistan
+time, for display.
 """
 import hashlib
 import json
@@ -238,9 +245,7 @@ def _hash_local_file(path):
             'size_bytes': stat.st_size,
             # st_mtime is epoch seconds; reading it through the local
             # clock would store a different time than utcnow() does.
-            'modified_at': datetime.fromtimestamp(
-                stat.st_mtime, tz=timezone.utc
-            ).replace(tzinfo=None),
+            'modified_at': _utc_from_epoch(stat.st_mtime),
         }
     except (OSError, ValueError) as exc:
         log.debug('Skipping unreadable file %s: %s', path, exc)
@@ -293,7 +298,11 @@ def _windows_hash_script(entry):
         "         Path = $item.FullName; "
         "         Sha256 = $hash; "
         "         Size = $item.Length; "
-        "         Modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'); "
+        # LastWriteTime is the *monitored machine's* local time, and only that
+        # machine knows its own offset. LastWriteTimeUtc is the same instant
+        # already converted there, which is what the Security-log query does
+        # with TimeCreated and what everything downstream expects.
+        "         Modified = $item.LastWriteTimeUtc.ToString('yyyy-MM-dd HH:mm:ss'); "
         "      } | ConvertTo-Json -Compress "
         "   } catch { continue } "
         "}"
@@ -316,7 +325,11 @@ def _scan_linux(host, entry):
         'while IFS= read -r f; do '
         '  h=$(sha256sum -- "$f" 2>/dev/null | cut -d" " -f1); '
         '  s=$(stat -c %s -- "$f" 2>/dev/null); '
-        '  m=$(stat -c %y -- "$f" 2>/dev/null | cut -d. -f1); '
+        # %Y is epoch seconds, which are already UTC. %y is the same instant
+        # rendered on the remote box's *local* clock, and storing that as if
+        # it were UTC is what put a watched file hours away from the event
+        # that reported it.
+        '  m=$(stat -c %Y -- "$f" 2>/dev/null); '
         '  [ -n "$h" ] && printf \'%s\\t%s\\t%s\\t%s\\n\' "$h" "$s" "$m" "$f"; '
         'done'
     )
@@ -334,7 +347,7 @@ def _scan_linux(host, entry):
             'path': path,
             'sha256': digest,
             'size_bytes': _int_or_none(size),
-            'modified_at': _parse_timestamp(modified),
+            'modified_at': _utc_from_epoch(modified),
         })
 
     hit_cap = len(records) > FIM_MAX_FILES_PER_PATH
@@ -496,7 +509,34 @@ def _int_or_none(value):
         return None
 
 
+def _utc_from_epoch(value):
+    """
+    Epoch seconds to a naive UTC datetime.
+
+    Both the local scanner (`os.stat`) and the Linux one (`stat -c %Y`) read a
+    modification time as seconds since the epoch, which is an instant rather
+    than a wall clock and so carries no timezone to get wrong. Converting them
+    in one place is what keeps a file scanned over SSH on the same clock as
+    one scanned in-process.
+    """
+    if value in (None, ''):
+        return None
+    try:
+        return datetime.fromtimestamp(
+            float(value), tz=timezone.utc
+        ).replace(tzinfo=None)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
 def _parse_timestamp(value):
+    """
+    Parse a modification time already converted to UTC by the remote scanner.
+
+    Only the Windows path uses this: PowerShell sends `LastWriteTimeUtc`
+    formatted as a string, so there is nothing left to convert here and doing
+    so again would shift it a second time.
+    """
     if not value:
         return None
     try:

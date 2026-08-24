@@ -370,3 +370,215 @@ def test_pakistan_time_is_five_hours_ahead_of_what_is_stored():
     displayed = stored.astimezone(ZoneInfo('Asia/Karachi'))
 
     assert displayed.strftime('%d %b %Y, %H:%M:%S') == '22 Aug 2026, 01:35:42'
+
+
+# ---------------------------------------------------------------------------
+# File integrity: a modification time is read on the machine that owns it
+# ---------------------------------------------------------------------------
+#
+# The same rule as the collectors, and it was broken in the same way. A
+# watched file's modification time comes from the monitored host, which keeps
+# it in its own local time, so a file changed at 21:30 in Lahore was recorded
+# as 21:30 UTC and appeared on the dashboard at 02:30 the next morning -- five
+# hours away from the FILE_MODIFIED event that reported it.
+
+def test_the_remote_windows_scan_reads_the_utc_modification_time():
+    """
+    LastWriteTime is the monitored machine's local clock; LastWriteTimeUtc is
+    the same instant converted there, which is the only place it can be.
+    """
+    from app.models import WatchedPath
+    from app.services.file_integrity import _windows_hash_script
+
+    script = _windows_hash_script(WatchedPath(path=r'C:\Windows\System32'))
+
+    assert '$item.LastWriteTimeUtc.ToString(' in script
+    # The naive form must be gone entirely, not merely accompanied.
+    assert '$item.LastWriteTime.ToString(' not in script
+
+
+def test_the_linux_scan_asks_for_epoch_seconds_not_a_local_wall_clock():
+    """
+    `stat -c %y` renders the remote box's local time; `%Y` is epoch seconds,
+    which are an instant and so carry no offset to misread.
+    """
+    from app.models import WatchedPath
+    from app.services.file_integrity import _scan_linux
+
+    captured = {}
+
+    class _Remote:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def run(self, command):
+            captured['command'] = command
+            return '', ''
+
+    import app.services.collection as collection_service
+
+    original = collection_service._ssh_for
+    collection_service._ssh_for = lambda host: _Remote()
+    try:
+        _scan_linux(object(), WatchedPath(path='/etc', recursive=False))
+    finally:
+        collection_service._ssh_for = original
+
+    assert 'stat -c %Y' in captured['command']
+    assert 'stat -c %y' not in captured['command']
+
+
+def test_epoch_seconds_become_utc_whatever_the_servers_own_timezone_is():
+    """
+    The conversion both scanners share. Reading epoch seconds through the
+    local clock is what made an SSH-scanned file disagree with a locally
+    scanned one on the same SIEM.
+    """
+    from app.services.file_integrity import _utc_from_epoch
+
+    moment = datetime(2026, 8, 24, 16, 30, 0, tzinfo=timezone.utc)
+
+    # Both the string a shell returns and the float os.stat returns.
+    assert _utc_from_epoch(str(int(moment.timestamp()))) == moment.replace(tzinfo=None)
+    assert _utc_from_epoch(moment.timestamp()) == moment.replace(tzinfo=None)
+
+
+def test_an_unreadable_modification_time_is_left_empty_rather_than_guessed():
+    """A missing time is missing. Substituting `now` would invent evidence."""
+    from app.services.file_integrity import _utc_from_epoch
+
+    assert _utc_from_epoch(None) is None
+    assert _utc_from_epoch('') is None
+    assert _utc_from_epoch('not a number') is None
+
+
+# ---------------------------------------------------------------------------
+# Repairing alerts alongside the events they came from
+# ---------------------------------------------------------------------------
+
+def test_an_alert_takes_its_time_from_the_event_that_raised_it(app):
+    """
+    This is *why* the repair has to cover alerts, so it is asserted rather
+    than assumed: if the engine ever stamped alerts with its own clock
+    instead, shifting them would introduce the error it set out to remove.
+    """
+    from app.extensions import db
+    from app.models import Alert, Event, Host
+    from app.services.detection import DetectionEngine
+
+    host = Host(hostname='Lab-PC', ip_address='10.0.0.9', os_type='WINDOWS')
+    db.session.add(host)
+    db.session.commit()
+
+    when = datetime(2026, 8, 20, 16, 30, 0)
+    for index in range(6):
+        db.session.add(Event(
+            host_id=host.id, timestamp=when, event_type='FAILED_LOGIN',
+            source_ip='203.0.113.50', username='root',
+            message='Failed password for root', origin='COLLECTED',
+        ))
+    db.session.commit()
+
+    DetectionEngine.run(host_id=host.id)
+
+    raised = Alert.query.filter_by(host_id=host.id).all()
+    assert raised, 'expected the brute-force rule to fire'
+    assert all(alert.timestamp == when for alert in raised)
+
+
+def test_alerts_are_repaired_with_the_events_they_copied():
+    """
+    An event repaired on its own leaves the Alerts page contradicting the
+    Events page about when the same incident happened.
+    """
+    from types import SimpleNamespace
+
+    from scripts.fix_event_timezones import alerts_following
+
+    when = datetime(2026, 8, 20, 13, 38, 20)
+    event = SimpleNamespace(id=1, timestamp=when, ingested_at=when)
+    alert = SimpleNamespace(event_id=1, timestamp=when)
+
+    assert alerts_following([event], {1: [alert]}) == [alert]
+
+
+def test_an_alert_that_did_not_copy_its_event_is_left_alone():
+    """
+    Only times that can be shown to be wrong are touched. An alert whose time
+    differs from its event's was not copied from it, so nothing here knows
+    what clock it is on.
+    """
+    from types import SimpleNamespace
+
+    from scripts.fix_event_timezones import alerts_following
+
+    event = SimpleNamespace(
+        id=1, timestamp=datetime(2026, 8, 20, 13, 38, 20), ingested_at=None,
+    )
+    unrelated = SimpleNamespace(event_id=1, timestamp=datetime(2026, 8, 20, 20, 38, 42))
+
+    assert alerts_following([event], {1: [unrelated]}) == []
+
+
+# ---------------------------------------------------------------------------
+# Refusing an estimate that is not a timezone
+# ---------------------------------------------------------------------------
+
+def test_a_real_timezone_offset_is_accepted():
+    from scripts.fix_event_timezones import is_plausible_offset
+
+    assert is_plausible_offset(5 * 3600)          # Pakistan
+    assert is_plausible_offset(-7 * 3600)         # US Pacific
+    assert is_plausible_offset(5 * 3600 + 45 * 60)  # Nepal
+    assert is_plausible_offset(0)
+
+
+def test_an_estimate_from_imported_history_is_refused():
+    """
+    A sample log dated last week and imported today reads as an offset of
+    days. Applying that would move a demonstration's events into the future;
+    no timezone is more than fourteen hours from UTC.
+    """
+    from scripts.fix_event_timezones import is_plausible_offset
+
+    assert not is_plausible_offset(-237 * 3600)
+    assert not is_plausible_offset(15 * 3600)
+    assert not is_plausible_offset(-13 * 3600)
+
+
+# ---------------------------------------------------------------------------
+# The retained-archive name an operator reads beside the events it holds
+# ---------------------------------------------------------------------------
+
+def test_a_retained_archive_is_named_on_the_utc_clock(app, tmp_path):
+    """
+    The Events page prints this filename next to an import's results, so it is
+    a time the operator reads. Built from the server's local clock it sat
+    hours away from the events inside it on any machine not set to UTC.
+    """
+    from app.services.data_manager import DataManager
+
+    app.config['STORAGE_FOLDER'] = tmp_path
+
+    filename, count = DataManager.save_logs_to_parquet(
+        [{
+            'timestamp': datetime(2026, 8, 24, 16, 30, 0),
+            'alert_type': 'USB_DEVICE_CONNECTED',
+            'source_ip': 'LOCAL_CONSOLE',
+            'user': 'student',
+            'message': 'USB device connected',
+            'raw_log': '{}',
+        }],
+        host_id=1,
+    )
+
+    assert count == 1
+    stamped = datetime.strptime(
+        filename.removeprefix('logs_1_').removesuffix('.parquet'),
+        '%Y%m%d_%H%M%S_%f',
+    )
+    drift = abs((stamped - utcnow()).total_seconds())
+    assert drift < 60, f'archive {filename} is not named on the UTC clock'

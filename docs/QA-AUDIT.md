@@ -2,8 +2,8 @@
 
 **Project:** Mini-SIEM — Centralised Lab Monitoring & Security Controller
 **Supervisor:** Mr. Fiaz Ahmed Memon
-**Audit date:** 22 August 2026
-**Automated suite at time of audit:** 370 tests, all passing (`python -m pytest`)
+**Audit date:** 22 August 2026, revised 24 August 2026 (§3.4, §3.5)
+**Automated suite at time of audit:** 379 tests, all passing (`python -m pytest`)
 
 ---
 
@@ -122,7 +122,39 @@ Conversion now happens on the machine that owns the clock.
 host's offset from the gap between its event times and the ingestion times the
 SIEM wrote itself.
 
-### 3.4 A blank timezone setting would have disabled Pakistan time
+### 3.4 File modification times kept the defect 3.3 removed from events
+
+The same fault survived in File Integrity Monitoring. A watched file's
+modification time is read from the monitored host, and only the local scanner
+converted it: the WinRM scanner sent `LastWriteTime` and the SSH scanner sent
+`stat -c %y`, both of which are the *monitored* machine's wall clock, stored
+as though they were UTC. A file changed at 21:30 in Lahore was therefore
+recorded as 21:30 UTC and read back as 02:30 the next morning — five hours
+away from the FILE_MODIFIED event reporting the same change, and inconsistent
+with the same file scanned locally.
+
+Both remote scanners now send an instant rather than a wall clock
+(`LastWriteTimeUtc` and `stat -c %Y`), and all three share one epoch-to-UTC
+conversion, so a file hashed over SSH lands on the same clock as one hashed
+in-process.
+
+### 3.5 Repairing an event left its alert on the old clock
+
+An alert is stamped with the time of the event that triggered it, not with the
+clock reading at the moment the rule fired, so an event stored on the wrong
+clock raised an alert on the wrong clock. The repair script corrected only
+events, which would have left the Alerts page contradicting the Events page
+about when one incident happened. Alerts that copied their event's time now
+move with it; one whose time differs was not copied from the event and is left
+untouched.
+
+The estimator also refused nothing: a sample log dated last week and imported
+today reads as an offset of days, and `--apply` would have moved a
+demonstration's events into the future. Any estimate outside the −12:00 to
++14:00 range real timezones occupy is now reported and skipped rather than
+offered.
+
+### 3.6 A blank timezone setting would have disabled Pakistan time
 
 `.env.example` ships `MINISIEM_DISPLAY_TIMEZONE=` with no value, so the
 documented "copy the example to .env" set it to an empty string. Reading that
@@ -130,14 +162,14 @@ as "use the browser's zone" would have switched PKT off for exactly the people
 who followed the setup instructions. An empty value now falls back to the
 default.
 
-### 3.5 An unset refresh preference read as "off"
+### 3.7 An unset refresh preference read as "off"
 
 `Number(localStorage.getItem(key))` is `0` when the key is absent, and `0` is
 a legitimate stored value meaning *off*. A first-time visitor therefore got a
 dashboard that never refreshed itself. Found by opening the page, not by a
 test.
 
-### 3.6 A failed refresh wiped the tables
+### 3.8 A failed refresh wiped the tables
 
 Each panel cleared itself before fetching and drew an error row on failure, so
 a dropped connection replaced the alert table, the host table and the ATT&CK
@@ -145,7 +177,7 @@ table with error messages — destroying the last known good picture at the
 moment an operator most needs it. Panels now fetch first, keep their rows on
 failure, and dim them to show they are no longer current.
 
-### 3.7 `.flaskenv` shipped `FLASK_DEBUG=1`
+### 3.9 `.flaskenv` shipped `FLASK_DEBUG=1`
 
 The documented way to start the application started it with Werkzeug's
 debugger enabled, which turns any unhandled exception into an interactive
@@ -153,7 +185,7 @@ Python console in the browser — on a process reading Windows Security logs and
 holding an administrator session. Debug is now off by default, with
 instructions for enabling it deliberately during development.
 
-### 3.8 The default `SECRET_KEY` passed silently
+### 3.10 The default `SECRET_KEY` passed silently
 
 Session cookies are signed with `SECRET_KEY`. If it is the value published in
 this repository, anyone who knows it can forge an administrator cookie. The

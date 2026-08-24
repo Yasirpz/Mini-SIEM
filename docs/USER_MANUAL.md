@@ -104,7 +104,16 @@ produce events that are hours out, and no amount of display configuration will
 fix that — the fix is on that machine. Events collected before this version
 were stored on the monitored machine's wall clock rather than in UTC;
 `python scripts/fix_event_timezones.py` reports what it would change, and
-`--apply` rewrites them.
+`--apply` rewrites them. Any alert that took its time from a repaired event
+moves with it, so the Alerts and Events pages continue to agree.
+
+Read the report before applying it. The script works a host's offset out from
+the gap between its event times and the times the SIEM recorded them, which
+assumes events were collected close to when they happened. Imported sample
+logs break that assumption — one dated last week and imported today looks like
+an offset of days — so an estimate outside the range real timezones occupy is
+reported and skipped. If you know the right offset, state it:
+`--host 3 --offset +5 --apply`.
 
 ### Reading severity
 
