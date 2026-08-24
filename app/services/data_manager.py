@@ -6,11 +6,12 @@ raw evidence survives even if the alerts derived from it are later cleared.
 Parquet is columnar and compressed, which keeps retained logs small and quick
 to filter when replaying an incident.
 """
-from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 from flask import current_app
+
+from app.models import utcnow
 
 # Columns every archived batch carries, so files stay schema-compatible even
 # when a particular log source didn't populate all of them.
@@ -60,7 +61,11 @@ class DataManager:
             if column not in df.columns:
                 df[column] = None
 
-        timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        # UTC, like every other time this project records. The name is what
+        # an operator sees beside the events it holds -- reading it on the
+        # server's local clock put the archive hours away from its own
+        # contents on any machine not set to UTC.
+        timestamp_str = utcnow().strftime('%Y%m%d_%H%M%S_%f')
         filename = f"logs_{host_id}_{timestamp_str}.parquet"
 
         # Mixed types (datetimes alongside strings) upset the Parquet writer,
